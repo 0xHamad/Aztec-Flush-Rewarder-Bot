@@ -4,6 +4,7 @@
   "description": "Professional Aztec Flush Rewarder Bot with epoch monitoring and auto-claim",
   "main": "bot.js",
   "scripts": {
+    "setup": "bash setup.sh",
     "start": "node bot.js",
     "test": "node test-connection.js"
   },
@@ -15,7 +16,7 @@
     "rewarder",
     "bot"
   ],
-  "author": "",
+  "author": "0xHamad",
   "license": "MIT",
   "dependencies": {
     "ethers": "^6.10.0",

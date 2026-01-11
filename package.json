@@ -1,27 +1,17 @@
 {
   "name": "aztec-flush-rewarder-bot",
-  "version": "2.0.0",
-  "description": "Professional Aztec Flush Rewarder Bot with epoch monitoring and auto-claim",
+  "version": "3.0.0",
+  "description": "Aztec Flush Rewarder Bot - On-chain Epoch Trigger + Flashbots",
   "main": "bot.js",
   "scripts": {
-    "setup": "bash setup.sh",
-    "start": "node bot.js",
-    "test": "node test-connection.js"
+    "start": "node bot.js"
   },
-  "keywords": [
-    "aztec",
-    "ethereum",
-    "validator",
-    "flush",
-    "rewarder",
-    "bot"
-  ],
   "author": "0xHamad",
   "license": "MIT",
   "dependencies": {
-    "ethers": "^6.10.0",
     "dotenv": "^16.3.1",
-    "@flashbots/ethers-provider-bundle": "^1.0.0"
+    "ethers": "6.7.1",
+    "@flashbots/ethers-provider-bundle": "1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

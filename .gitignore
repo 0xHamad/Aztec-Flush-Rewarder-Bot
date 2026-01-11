@@ -1,8 +1,4 @@
-# ==========================================
-# Aztec Flush Bot - Git Ignore File
-# ==========================================
-
-# Environment variables (CONTAINS PRIVATE KEYS!)
+# Environment variables (CRITICAL - CONTAINS PRIVATE KEYS!)
 .env
 .env.local
 .env.*.local
@@ -30,24 +26,17 @@ pids/
 
 # OS files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # IDE files
 .vscode/
 .idea/
 *.swp
-*.swo
-*~
 
 # Build files
 dist/
 build/
 
-# PM2 files
+# PM2
 .pm2/
 pm2.log

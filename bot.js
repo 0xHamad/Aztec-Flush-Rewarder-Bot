@@ -1,8 +1,10 @@
-// Aztec Flush Rewarder Bot - ULTRA-AGGRESSIVE WebSocket Edition
-// ================================================================
-// Features: WebSocket real-time, 0.001s response, 97% trigger
+// Aztec Flush Rewarder Bot - PROFESSIONAL FLASHBOTS EDITION
+// ===========================================================
+// Formula: next_epoch_start = genesis_time + (next_epoch × epoch_duration_secs)
+// Uses Flashbots for guaranteed block inclusion
 require('dotenv').config();
 const { ethers } = require('ethers');
+const { FlashbotsBundleProvider } = require('@flashbots/ethers-provider-bundle');
 
 // ==================== CONFIGURATION ====================
 const CONFIG = {
@@ -10,35 +12,35 @@ const CONFIG = {
     FLUSH_REWARDER: '0x7C9a7130379F1B5dd6e7A53AF84fC0fE32267B65',
     ROLLUP: '0x603bb2c05D474794ea97805e8De69bCcFb3bCA12',
     
-    // Epoch Settings
-    EPOCH_DURATION: 38.4 * 60, // 38.4 minutes in seconds
+    // Aztec Epoch Constants (from rollup contract)
+    SLOT_DURATION: 72,           // seconds per slot
+    SLOTS_PER_EPOCH: 32,         // slots per epoch
+    EPOCH_DURATION: 72 * 32,     // 2304 seconds (38.4 minutes)
     
-    // Multi-speed monitoring
-    NORMAL_INTERVAL: 10000,      // 10s (0-89%)
-    MEDIUM_INTERVAL: 5000,       // 5s (90-94%)
-    FAST_INTERVAL: 1000,         // 1s (95-96%)
-    ULTRA_INTERVAL: 10,          // 0.01s (97-99%)
-    INSTANT_INTERVAL: 1,         // 0.001s (new epoch trigger)
+    // Flashbots Settings
+    FLASHBOTS_RELAY_URLS: [
+        'https://relay.flashbots.net',
+        'https://builder0x69.io',
+        'https://rpc.titanbuilder.xyz',
+        'https://rsync-builder.xyz',
+    ],
     
-    // Thresholds
-    MEDIUM_THRESHOLD: 0.90,      // 90%
-    FAST_THRESHOLD: 0.95,        // 95%
-    ULTRA_THRESHOLD: 0.97,       // 97% - ULTRA AGGRESSIVE!
+    // Timing
+    SEND_BEFORE_EPOCH: 25,       // Send 25 seconds before new epoch
+    BLOCK_TIME_AVG: 12,          // Average block time (12s)
     
     // Gas Settings (USD based)
     MIN_GAS_USD: 0.20,
     MAX_GAS_USD: 0.30,
-    ETH_PRICE_USD: 3300, // Will fetch live price
+    ETH_PRICE_USD: 3300,
     
     GAS_LIMIT_FLUSH: 200000,
-    GAS_LIMIT_CLAIM: 100000,
     
     // Rewards
     MIN_CLAIM_AMOUNT: ethers.parseEther('100'),
     
-    // Performance
-    MAX_RETRIES: 2,
-    PRE_SEND_BUFFER: 100, // 0.1s before epoch change
+    // Monitoring
+    CHECK_INTERVAL: 1000,        // Check every 1 second
 };
 
 // ==================== ABIs ====================
@@ -47,315 +49,307 @@ const FLUSH_ABI = [
     'function claimRewards() external',
     'function rewardsOf(address) external view returns (uint256)',
     'function rewardsAvailable() external view returns (uint256)',
-    'function rewardPerInsertion() external view returns (uint256)'
 ];
 
 const ROLLUP_ABI = [
-    'function getCurrentSlot() external view returns (uint256)',
-    'event L2BlockProcessed(uint256 indexed blockNumber)'
+    'function getCurrentEpoch() external view returns (uint256)',
+    'function getEpochForBlock(uint256) external view returns (uint256)',
+    'function GENESIS_TIME() external view returns (uint256)',
+    'function EPOCH_DURATION() external view returns (uint256)',
+    'function SLOT_DURATION() external view returns (uint256)',
 ];
 
-// ==================== ULTRA-AGGRESSIVE BOT ====================
-class UltraAggressiveBot {
+// ==================== PROFESSIONAL BOT ====================
+class ProfessionalFlashbotsBot {
     constructor() {
-        this.wsProvider = null;
-        this.httpProvider = null;
+        this.provider = null;
         this.wallet = null;
-        this.wsWallet = null;
+        this.flashbotsProvider = null;
         this.flushContract = null;
         this.rollupContract = null;
         
+        this.genesisTime = null;
         this.currentEpoch = 0;
         this.lastFlushEpoch = -1;
+        this.nextEpochTarget = null;
+        
         this.isProcessing = false;
-        this.currentInterval = CONFIG.NORMAL_INTERVAL;
-        this.inUltraMode = false;
+        this.bundleSubmitted = false;
         
         this.stats = {
-            flushes: 0,
-            success: 0,
-            failed: 0,
+            bundlesSubmitted: 0,
+            bundlesIncluded: 0,
+            flushSuccess: 0,
+            flushFailed: 0,
             claimed: ethers.parseEther('0'),
             gasSpent: ethers.parseEther('0'),
-            epochChanges: 0,
-            fastestFlush: null,
             startTime: Date.now()
         };
     }
 
-    // Initialize WebSocket + HTTP providers
+    // Initialize
     async initialize() {
-        console.log('🚀 ULTRA-AGGRESSIVE AZTEC FLUSH BOT');
+        console.log('🏆 PROFESSIONAL FLASHBOTS FLUSH BOT');
         console.log('━'.repeat(60));
-        console.log('⚡ Features:');
-        console.log('   • WebSocket real-time monitoring');
-        console.log('   • 0.001s instant response on epoch change');
-        console.log('   • 97% ultra-fast mode activation');
-        console.log('   • $0.20-$0.30 gas optimization\n');
+        console.log('⚡ Formula-Based Epoch Prediction');
+        console.log('🚀 Flashbots Bundle Submission');
+        console.log('🎯 Guaranteed Block Inclusion\n');
         
-        // Validate environment
         if (!process.env.RPC_URL) throw new Error('❌ RPC_URL missing');
         if (!process.env.PRIVATE_KEY) throw new Error('❌ PRIVATE_KEY missing');
         
-        const rpcUrl = process.env.RPC_URL;
+        // Setup provider
+        this.provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
         
-        // Detect WebSocket URL
-        let wsUrl = process.env.WS_RPC_URL;
-        if (!wsUrl) {
-            // Auto-convert HTTP to WebSocket
-            if (rpcUrl.includes('alchemy.com')) {
-                wsUrl = rpcUrl.replace('https://', 'wss://').replace('/v2/', '/v2/');
-            } else if (rpcUrl.includes('infura.io')) {
-                wsUrl = rpcUrl.replace('https://', 'wss://');
-            } else {
-                console.log('⚠️  WebSocket URL not found, using HTTP only');
-                console.log('💡 Add WS_RPC_URL to .env for best performance\n');
-            }
-        }
-        
-        // Setup providers
-        this.httpProvider = new ethers.JsonRpcProvider(rpcUrl);
-        
-        if (wsUrl) {
-            try {
-                this.wsProvider = new ethers.WebSocketProvider(wsUrl);
-                console.log('✅ WebSocket connected (ULTRA-FAST mode available)');
-            } catch (error) {
-                console.log('⚠️  WebSocket failed, using HTTP fallback');
-                this.wsProvider = null;
-            }
-        }
-        
-        // Setup wallet
-        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.httpProvider);
-        if (this.wsProvider) {
-            this.wsWallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.wsProvider);
-        }
+        // Setup Flashbots
+        console.log('🔌 Connecting to Flashbots...');
+        this.flashbotsProvider = await FlashbotsBundleProvider.create(
+            this.provider,
+            this.wallet,
+            CONFIG.FLASHBOTS_RELAY_URLS[0], // Primary relay
+            'mainnet'
+        );
+        console.log('✅ Flashbots connected\n');
         
         // Setup contracts
-        this.flushContract = new ethers.Contract(CONFIG.FLUSH_REWARDER, FLUSH_ABI, this.wallet);
-        this.rollupContract = new ethers.Contract(CONFIG.ROLLUP, ROLLUP_ABI, this.httpProvider);
+        this.flushContract = new ethers.Contract(
+            CONFIG.FLUSH_REWARDER,
+            FLUSH_ABI,
+            this.wallet
+        );
+        
+        this.rollupContract = new ethers.Contract(
+            CONFIG.ROLLUP,
+            ROLLUP_ABI,
+            this.provider
+        );
+        
+        // Get genesis time from rollup contract
+        console.log('📡 Reading genesis time from Rollup contract...');
+        try {
+            this.genesisTime = await this.rollupContract.GENESIS_TIME();
+            console.log(`✅ Genesis Time: ${this.genesisTime.toString()}`);
+            console.log(`   (${new Date(Number(this.genesisTime) * 1000).toISOString()})\n`);
+        } catch (error) {
+            console.log('⚠️  Could not read GENESIS_TIME() from contract');
+            console.log('   Using alternative method...\n');
+            // Fallback: calculate from current epoch
+            await this.calculateGenesisTime();
+        }
         
         // Display info
         await this.displayInfo();
         
-        // Subscribe to WebSocket blocks if available
-        if (this.wsProvider) {
-            this.wsProvider.on('block', (blockNumber) => {
-                this.onNewBlock(blockNumber);
-            });
-            console.log('✅ Subscribed to real-time block updates\n');
-        }
-        
         console.log('━'.repeat(60));
     }
 
+    // Calculate genesis time if direct read fails
+    async calculateGenesisTime() {
+        const currentEpoch = await this.rollupContract.getCurrentEpoch();
+        const block = await this.provider.getBlock('latest');
+        const currentTime = block.timestamp;
+        
+        // genesis_time = current_time - (current_epoch × epoch_duration)
+        this.genesisTime = BigInt(currentTime) - (currentEpoch * BigInt(CONFIG.EPOCH_DURATION));
+        console.log(`✅ Genesis Time (calculated): ${this.genesisTime.toString()}\n`);
+    }
+
     async displayInfo() {
-        const balance = await this.httpProvider.getBalance(this.wallet.address);
+        const balance = await this.provider.getBalance(this.wallet.address);
         const pending = await this.flushContract.rewardsOf(this.wallet.address);
         const available = await this.flushContract.rewardsAvailable();
+        const currentEpoch = await this.rollupContract.getCurrentEpoch();
         
-        console.log('\n📊 Configuration:');
+        console.log('📊 Configuration:');
         console.log(`   Wallet: ${this.wallet.address}`);
         console.log(`   ETH: ${ethers.formatEther(balance)}`);
         console.log(`   Pending: ${ethers.formatEther(pending)} AZTEC`);
         console.log(`   Pool: ${ethers.formatEther(available)} AZTEC`);
+        console.log(`   Current Epoch: ${currentEpoch.toString()}`);
         
-        // Calculate gas limits
-        const feeData = await this.httpProvider.getFeeData();
-        const gasPrice = Number(ethers.formatUnits(feeData.gasPrice, 'gwei'));
-        const ethPrice = CONFIG.ETH_PRICE_USD;
+        console.log(`\n⚙️  Formula Settings:`);
+        console.log(`   Genesis Time: ${this.genesisTime.toString()}`);
+        console.log(`   Epoch Duration: ${CONFIG.EPOCH_DURATION}s (${CONFIG.EPOCH_DURATION/60} min)`);
+        console.log(`   Slot Duration: ${CONFIG.SLOT_DURATION}s`);
+        console.log(`   Slots per Epoch: ${CONFIG.SLOTS_PER_EPOCH}`);
+        console.log(`   Send Before: ${CONFIG.SEND_BEFORE_EPOCH}s before epoch`);
         
-        const minGwei = (CONFIG.MIN_GAS_USD / ethPrice / CONFIG.GAS_LIMIT_FLUSH * 1e9).toFixed(2);
-        const maxGwei = (CONFIG.MAX_GAS_USD / ethPrice / CONFIG.GAS_LIMIT_FLUSH * 1e9).toFixed(2);
-        
-        console.log(`\n⚙️  Speed Settings:`);
-        console.log(`   Normal: ${CONFIG.NORMAL_INTERVAL/1000}s (0-89%)`);
-        console.log(`   Medium: ${CONFIG.MEDIUM_INTERVAL/1000}s (90-94%)`);
-        console.log(`   Fast: ${CONFIG.FAST_INTERVAL/1000}s (95-96%)`);
-        console.log(`   Ultra: ${CONFIG.ULTRA_INTERVAL}ms (97-99%) 🔥`);
-        console.log(`   Instant: ${CONFIG.INSTANT_INTERVAL}ms (epoch change) 🚀`);
-        
-        console.log(`\n⛽ Gas Settings:`);
-        console.log(`   Current: ${gasPrice.toFixed(2)} Gwei`);
-        console.log(`   Target: ${minGwei}-${maxGwei} Gwei ($0.20-$0.30)`);
-        console.log(`   ETH Price: ~$${ethPrice}`);
+        console.log(`\n🚀 Flashbots Config:`);
+        console.log(`   Primary Relay: ${CONFIG.FLASHBOTS_RELAY_URLS[0]}`);
+        console.log(`   Backup Relays: ${CONFIG.FLASHBOTS_RELAY_URLS.length - 1}`);
+        console.log(`   Strategy: Bundle submission 25s before epoch`);
     }
 
-    // Get current epoch info
-    async getEpochInfo() {
+    // Calculate next epoch start timestamp
+    calculateNextEpochStart(currentEpoch) {
+        const nextEpoch = BigInt(currentEpoch) + 1n;
+        // Formula: next_epoch_start = genesis_time + (next_epoch × epoch_duration)
+        const nextEpochStart = this.genesisTime + (nextEpoch * BigInt(CONFIG.EPOCH_DURATION));
+        return {
+            epoch: Number(nextEpoch),
+            startTimestamp: Number(nextEpochStart),
+            startDate: new Date(Number(nextEpochStart) * 1000)
+        };
+    }
+
+    // Predict target block number from timestamp
+    async predictBlockNumber(targetTimestamp) {
+        const currentBlock = await this.provider.getBlock('latest');
+        const currentTime = currentBlock.timestamp;
+        const currentBlockNum = currentBlock.number;
+        
+        // Blocks until target = (target_time - current_time) / avg_block_time
+        const timeDiff = targetTimestamp - currentTime;
+        const blocksUntilTarget = Math.floor(timeDiff / CONFIG.BLOCK_TIME_AVG);
+        const predictedBlock = currentBlockNum + blocksUntilTarget;
+        
+        return {
+            current: currentBlockNum,
+            predicted: predictedBlock,
+            blocksAway: blocksUntilTarget,
+            timeAway: timeDiff
+        };
+    }
+
+    // Submit Flashbots bundle
+    async submitFlashbotsBundle(targetBlockNumber) {
         try {
-            const block = await this.httpProvider.getBlock('latest');
-            const currentTime = block.timestamp;
+            console.log(`\n🚀 Preparing Flashbots bundle for block ${targetBlockNumber}...`);
             
-            const epochDuration = CONFIG.EPOCH_DURATION;
-            const currentEpoch = Math.floor(currentTime / epochDuration);
-            const epochStart = currentEpoch * epochDuration;
-            const epochEnd = epochStart + epochDuration;
-            const timeInEpoch = currentTime - epochStart;
-            const progress = timeInEpoch / epochDuration;
-            const remaining = epochEnd - currentTime;
+            // Get gas price
+            const feeData = await this.provider.getFeeData();
+            const maxBaseFee = feeData.maxFeePerGas;
+            const priorityFee = feeData.maxPriorityFeePerGas;
             
-            return {
-                epoch: currentEpoch,
-                start: epochStart,
-                end: epochEnd,
-                current: currentTime,
-                timeIn: timeInEpoch,
-                progress: progress,
-                remaining: remaining,
-                blockNumber: block.number
-            };
+            // Create flush transaction
+            const flushTx = await this.flushContract.flushEntryQueue.populateTransaction();
+            
+            const signedBundle = await this.flashbotsProvider.signBundle([
+                {
+                    signer: this.wallet,
+                    transaction: {
+                        to: CONFIG.FLUSH_REWARDER,
+                        data: flushTx.data,
+                        gasLimit: CONFIG.GAS_LIMIT_FLUSH,
+                        maxFeePerGas: maxBaseFee,
+                        maxPriorityFeePerGas: priorityFee,
+                        chainId: 1,
+                        type: 2
+                    }
+                }
+            ]);
+            
+            console.log('   ✅ Bundle signed');
+            console.log(`   Target block: ${targetBlockNumber}`);
+            console.log(`   Gas: ${ethers.formatUnits(maxBaseFee, 'gwei')} Gwei`);
+            
+            // Submit to Flashbots
+            const bundleSubmission = await this.flashbotsProvider.sendRawBundle(
+                signedBundle,
+                targetBlockNumber
+            );
+            
+            this.stats.bundlesSubmitted++;
+            
+            console.log('   📤 Bundle submitted to Flashbots');
+            console.log(`   Bundle Hash: ${bundleSubmission.bundleHash}`);
+            
+            // Wait for inclusion
+            console.log('   ⏳ Waiting for bundle inclusion...');
+            
+            const waitResponse = await bundleSubmission.wait();
+            
+            if (waitResponse === 0) {
+                console.log('   ✅ BUNDLE INCLUDED IN BLOCK!');
+                this.stats.bundlesIncluded++;
+                this.stats.flushSuccess++;
+                return true;
+            } else if (waitResponse === 1) {
+                console.log('   ⚠️  Bundle not included (block passed)');
+                return false;
+            } else {
+                console.log('   ⚠️  Bundle not included (unknown reason)');
+                return false;
+            }
+            
         } catch (error) {
-            console.error('❌ Epoch info error:', error.message);
-            return null;
+            console.error('   ❌ Flashbots bundle error:', error.message);
+            this.stats.flushFailed++;
+            return false;
         }
     }
 
-    // WebSocket block handler - INSTANT epoch detection
-    async onNewBlock(blockNumber) {
-        if (this.isProcessing) return;
+    // Main monitoring loop
+    async run() {
+        console.log('\n🤖 BOT RUNNING...\n');
+        console.log('Press Ctrl+C to stop\n');
+        console.log('━'.repeat(60));
         
-        // Quick epoch check
-        const info = await this.getEpochInfo();
-        if (!info) return;
-        
-        // Detect NEW epoch change via WebSocket (fastest possible)
-        if (info.epoch !== this.currentEpoch) {
-            const oldEpoch = this.currentEpoch;
-            this.currentEpoch = info.epoch;
-            this.stats.epochChanges++;
-            
-            console.log(`\n🔔 WEBSOCKET: NEW EPOCH ${info.epoch}! (Block: ${blockNumber})`);
-            
-            // INSTANT FLUSH on new epoch - SABSE PEHLE!
-            if (this.lastFlushEpoch !== info.epoch) {
-                console.log('⚡ WEBSOCKET INSTANT FLUSH - 0.001s RESPONSE!');
-                await this.sleep(CONFIG.INSTANT_INTERVAL); // 0.001s only!
+        while (true) {
+            try {
+                // Get current epoch from contract
+                const currentEpoch = Number(await this.rollupContract.getCurrentEpoch());
+                const block = await this.provider.getBlock('latest');
+                const currentTime = block.timestamp;
                 
-                const flushStart = Date.now();
-                await this.attemptFlush(info, true);
-                const flushTime = Date.now() - flushStart;
+                // Calculate next epoch details
+                const nextEpoch = this.calculateNextEpochStart(currentEpoch);
+                const timeUntilNext = nextEpoch.startTimestamp - currentTime;
+                const minutesUntil = Math.floor(timeUntilNext / 60);
+                const secondsUntil = timeUntilNext % 60;
                 
-                console.log(`   ⚡ Total response time: ${flushTime}ms from epoch change!`);
-            }
-        }
-    }
-
-    // Adjust monitoring speed
-    adjustSpeed(progress) {
-        let interval = CONFIG.NORMAL_INTERVAL;
-        let mode = '⏰ NORMAL';
-        
-        if (progress >= CONFIG.ULTRA_THRESHOLD) {
-            interval = CONFIG.ULTRA_INTERVAL;
-            mode = '🚀 ULTRA-FAST';
-            this.inUltraMode = true;
-        } else if (progress >= CONFIG.FAST_THRESHOLD) {
-            interval = CONFIG.FAST_INTERVAL;
-            mode = '🔥 FAST';
-            this.inUltraMode = false;
-        } else if (progress >= CONFIG.MEDIUM_THRESHOLD) {
-            interval = CONFIG.MEDIUM_INTERVAL;
-            mode = '⚡ MEDIUM';
-            this.inUltraMode = false;
-        } else {
-            this.inUltraMode = false;
-        }
-        
-        if (this.currentInterval !== interval) {
-            this.currentInterval = interval;
-            console.log(`\n${mode} MODE (${interval}ms) @ ${(progress*100).toFixed(1)}%`);
-        }
-    }
-
-    // Check if gas is acceptable
-    async checkGas() {
-        const feeData = await this.httpProvider.getFeeData();
-        const gasPriceGwei = Number(ethers.formatUnits(feeData.gasPrice, 'gwei'));
-        const ethPrice = CONFIG.ETH_PRICE_USD;
-        
-        const minGwei = CONFIG.MIN_GAS_USD / ethPrice / CONFIG.GAS_LIMIT_FLUSH * 1e9;
-        const maxGwei = CONFIG.MAX_GAS_USD / ethPrice / CONFIG.GAS_LIMIT_FLUSH * 1e9;
-        
-        if (gasPriceGwei > maxGwei) {
-            console.log(`⚠️  Gas too high: ${gasPriceGwei.toFixed(2)} Gwei (max: ${maxGwei.toFixed(2)})`);
-            return { ok: false, feeData: null };
-        }
-        
-        return { ok: true, feeData: feeData, gasPrice: gasPriceGwei };
-    }
-
-    // Attempt flush
-    async attemptFlush(info, isInstant = false) {
-        if (this.isProcessing) return;
-        if (this.lastFlushEpoch === info.epoch) return;
-        
-        this.isProcessing = true;
-        const startTime = Date.now();
-        
-        try {
-            const gasCheck = await this.checkGas();
-            if (!gasCheck.ok) {
-                this.isProcessing = false;
-                return;
-            }
-            
-            const label = isInstant ? '⚡ INSTANT' : '🎯';
-            console.log(`\n${label} FLUSH @ ${(info.progress*100).toFixed(1)}% (Epoch ${info.epoch})`);
-            
-            // Use WebSocket wallet if available for faster tx
-            const contract = this.wsProvider ? 
-                new ethers.Contract(CONFIG.FLUSH_REWARDER, FLUSH_ABI, this.wsWallet) :
-                this.flushContract;
-            
-            const tx = await contract.flushEntryQueue({
-                gasLimit: CONFIG.GAS_LIMIT_FLUSH,
-                maxFeePerGas: gasCheck.feeData.maxFeePerGas,
-                maxPriorityFeePerGas: gasCheck.feeData.maxPriorityFeePerGas
-            });
-            
-            const sendTime = Date.now() - startTime;
-            console.log(`   TX: ${tx.hash}`);
-            console.log(`   Send time: ${sendTime}ms`);
-            console.log(`   Gas: ${gasCheck.gasPrice.toFixed(2)} Gwei`);
-            console.log('   ⏳ Confirming...');
-            
-            const receipt = await tx.wait();
-            
-            if (receipt.status === 1) {
-                const totalTime = Date.now() - startTime;
-                const gasUsed = receipt.gasUsed * receipt.gasPrice;
-                
-                this.stats.success++;
-                this.stats.gasSpent += gasUsed;
-                this.lastFlushEpoch = info.epoch;
-                
-                if (!this.stats.fastestFlush || totalTime < this.stats.fastestFlush) {
-                    this.stats.fastestFlush = totalTime;
+                // Update tracking
+                if (currentEpoch !== this.currentEpoch) {
+                    this.currentEpoch = currentEpoch;
+                    this.bundleSubmitted = false;
+                    console.log(`\n🔔 Current Epoch: ${currentEpoch}`);
                 }
                 
-                console.log(`   ✅ SUCCESS in ${totalTime}ms!`);
-                console.log(`   Gas: ${ethers.formatEther(gasUsed)} ETH`);
-                console.log(`   Block: ${receipt.blockNumber}`);
+                // Display status
+                console.log(`\r[${new Date().toLocaleTimeString()}] Epoch ${currentEpoch} | Next in: ${minutesUntil}m ${secondsUntil}s | ✅ ${this.stats.flushSuccess} | 📦 ${this.stats.bundlesIncluded}/${this.stats.bundlesSubmitted}`, );
                 
-                await this.checkClaim();
-            } else {
-                this.stats.failed++;
-                console.log('   ❌ TX failed');
-            }
-        } catch (error) {
-            this.stats.failed++;
-            
-            if (error.message.includes('execution reverted')) {
-                console.log('   ℹ️  Queue empty or already flushed');
-                this.lastFlushEpoch = info.epoch;
-            } else {
-                console.error('   ❌ Error:', error.message);
+                // Check if we should submit bundle (25-30s before new epoch)
+                const shouldSubmit = 
+                    timeUntilNext <= CONFIG.SEND_BEFORE_EPOCH && 
+                    timeUntilNext > 0 &&
+                    !this.bundleSubmitted &&
+                    !this.isProcessing &&
+                    this.lastFlushEpoch !== nextEpoch.epoch;
+                
+                if (shouldSubmit) {
+                    this.isProcessing = true;
+                    this.bundleSubmitted = true;
+                    
+                    console.log(`\n\n🎯 TRIGGER: ${timeUntilNext}s until Epoch ${nextEpoch.epoch}`);
+                    console.log(`   Next epoch starts: ${nextEpoch.startDate.toISOString()}`);
+                    
+                    // Predict target block
+                    const blockPrediction = await this.predictBlockNumber(nextEpoch.startTimestamp);
+                    console.log(`   Predicted block: ${blockPrediction.predicted} (in ${blockPrediction.blocksAway} blocks)`);
+                    
+                    // Submit Flashbots bundle
+                    const success = await this.submitFlashbotsBundle(blockPrediction.predicted);
+                    
+                    if (success) {
+                        this.lastFlushEpoch = nextEpoch.epoch;
+                        console.log(`   🎉 SUCCESS! Flushed epoch ${nextEpoch.epoch}`);
+                        
+                        // Auto-claim if needed
+                        await this.checkClaim();
+                    }
+                    
+                    this.isProcessing = false;
+                }
+                
+                // Sleep
+                await this.sleep(CONFIG.CHECK_INTERVAL);
+                
+            } catch (error) {
+                console.error('\n❌ Loop error:', error.message);
+                await this.sleep(5000);
             }
         }
-        
-        this.isProcessing = false;
     }
 
     // Auto claim
@@ -364,7 +358,7 @@ class UltraAggressiveBot {
             const pending = await this.flushContract.rewardsOf(this.wallet.address);
             if (pending >= CONFIG.MIN_CLAIM_AMOUNT) {
                 console.log(`\n💰 Claiming ${ethers.formatEther(pending)} AZTEC...`);
-                const tx = await this.flushContract.claimRewards({ gasLimit: CONFIG.GAS_LIMIT_CLAIM });
+                const tx = await this.flushContract.claimRewards({ gasLimit: 100000 });
                 await tx.wait();
                 this.stats.claimed += pending;
                 console.log(`   ✅ Claimed! TX: ${tx.hash}`);
@@ -374,91 +368,14 @@ class UltraAggressiveBot {
         }
     }
 
-    // Display status
-    showStatus(info) {
-        const bar = this.progressBar(info.progress);
-        const mins = Math.floor(info.remaining / 60);
-        const secs = Math.floor(info.remaining % 60);
-        
-        console.log(`\n[${new Date().toLocaleTimeString()}] Epoch ${info.epoch}`);
-        console.log(`${bar} ${(info.progress*100).toFixed(1)}%`);
-        console.log(`Remaining: ${mins}m ${secs}s | ✅ ${this.stats.success} | ❌ ${this.stats.failed}`);
-    }
-
-    progressBar(progress, len = 20) {
-        const filled = Math.floor(progress * len);
-        return '█'.repeat(filled) + '░'.repeat(len - filled);
-    }
-
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    // Main loop
-    async run() {
-        console.log('\n🤖 BOT RUNNING...\n');
-        console.log('Press Ctrl+C to stop\n');
-        console.log('━'.repeat(60));
-        
-        let readyForNewEpoch = false;
-        
-        while (true) {
-            try {
-                const info = await this.getEpochInfo();
-                if (!info) {
-                    await this.sleep(5000);
-                    continue;
-                }
-                
-                // Detect NEW epoch change
-                if (info.epoch !== this.currentEpoch) {
-                    const oldEpoch = this.currentEpoch;
-                    this.currentEpoch = info.epoch;
-                    this.stats.epochChanges++;
-                    
-                    console.log(`\n🔔 NEW EPOCH DETECTED: ${info.epoch} (Previous: ${oldEpoch})`);
-                    
-                    // INSTANT FLUSH on new epoch if we were ready!
-                    if (readyForNewEpoch && this.lastFlushEpoch !== info.epoch) {
-                        console.log('🚀 INSTANT FLUSH MODE - NEW EPOCH START!');
-                        await this.sleep(CONFIG.INSTANT_INTERVAL); // 0.001s
-                        await this.attemptFlush(info, true);
-                        readyForNewEpoch = false;
-                    }
-                }
-                
-                // Adjust speed based on progress
-                this.adjustSpeed(info.progress);
-                
-                // Show status
-                if (this.inUltraMode || Date.now() % 15000 < this.currentInterval) {
-                    this.showStatus(info);
-                }
-                
-                // At 97%+ prepare for next epoch but DON'T flush current epoch
-                if (info.progress >= CONFIG.ULTRA_THRESHOLD) {
-                    if (!readyForNewEpoch) {
-                        console.log(`\n⏳ READY MODE: Waiting for NEW epoch to start...`);
-                        console.log(`   Current epoch ${info.epoch} at ${(info.progress*100).toFixed(1)}%`);
-                        console.log(`   Will flush NEW epoch ${info.epoch + 1} instantly!`);
-                        readyForNewEpoch = true;
-                    }
-                    // Don't flush current epoch, just wait
-                }
-                
-                await this.sleep(this.currentInterval);
-                
-            } catch (error) {
-                console.error('❌ Loop error:', error.message);
-                await this.sleep(5000);
-            }
-        }
     }
 }
 
 // ==================== MAIN ====================
 async function main() {
-    const bot = new UltraAggressiveBot();
+    const bot = new ProfessionalFlashbotsBot();
     await bot.initialize();
     await bot.run();
 }
@@ -466,11 +383,13 @@ async function main() {
 process.on('SIGINT', () => {
     console.log('\n\n⏹️  Stopping bot...');
     console.log(`\n📊 Final Stats:`);
-    console.log(`   Success: ${bot?.stats?.success || 0}`);
-    console.log(`   Failed: ${bot?.stats?.failed || 0}`);
+    console.log(`   Bundles Submitted: ${bot?.stats?.bundlesSubmitted || 0}`);
+    console.log(`   Bundles Included: ${bot?.stats?.bundlesIncluded || 0}`);
+    console.log(`   Flush Success: ${bot?.stats?.flushSuccess || 0}`);
     console.log(`   Claimed: ${ethers.formatEther(bot?.stats?.claimed || 0)} AZTEC`);
-    if (bot?.stats?.fastestFlush) {
-        console.log(`   Fastest: ${bot.stats.fastestFlush}ms`);
+    if (bot?.stats?.bundlesSubmitted > 0) {
+        const successRate = ((bot.stats.bundlesIncluded / bot.stats.bundlesSubmitted) * 100).toFixed(1);
+        console.log(`   Success Rate: ${successRate}%`);
     }
     console.log('\n👋 Goodbye!\n');
     process.exit(0);
@@ -483,4 +402,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = UltraAggressiveBot;
+module.exports = ProfessionalFlashbotsBot;

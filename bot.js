@@ -267,15 +267,67 @@ class ProfessionalFlashbotsBot {
         };
     }
 
-    // Submit Flashbots bundle
+    // Send direct transaction (backup method)
+    async sendDirectTransaction() {
+        try {
+            console.log('   📤 Submitting direct transaction...');
+            
+            // Check gas price
+            const feeData = await this.provider.getFeeData();
+            const gasPriceGwei = Number(ethers.formatUnits(feeData.gasPrice, 'gwei'));
+            
+            console.log(`   Gas: ${gasPriceGwei.toFixed(2)} Gwei`);
+            
+            // Send flush transaction
+            const tx = await this.flushContract.flushEntryQueue({
+                gasLimit: CONFIG.GAS_LIMIT_FLUSH,
+                maxFeePerGas: feeData.maxFeePerGas,
+                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')
+            });
+            
+            console.log(`   TX: ${tx.hash}`);
+            console.log(`   ⏳ Confirming...`);
+            
+            const receipt = await tx.wait();
+            
+            if (receipt.status === 1) {
+                const gasUsed = receipt.gasUsed * receipt.gasPrice;
+                this.stats.gasSpent += gasUsed;
+                this.stats.flushSuccess++;
+                
+                console.log(`   ✅ Direct TX confirmed!`);
+                console.log(`   Gas: ${ethers.formatEther(gasUsed)} ETH`);
+                console.log(`   Block: ${receipt.blockNumber}`);
+                
+                return true;
+            } else {
+                this.stats.flushFailed++;
+                console.log(`   ❌ TX failed`);
+                return false;
+            }
+            
+        } catch (error) {
+            this.stats.flushFailed++;
+            
+            if (error.message.includes('execution reverted')) {
+                console.log(`   ℹ️  Queue empty or already flushed`);
+                return true; // Consider this a success (epoch already flushed)
+            }
+            
+            console.error(`   ❌ Direct TX error: ${error.message}`);
+            return false;
+        }
+    }
+
+    // Submit Flashbots bundle (async, non-blocking)
     async submitFlashbotsBundle(targetBlockNumber) {
         try {
-            console.log(`\n🚀 Preparing Flashbots bundle for block ${targetBlockNumber}...`);
+            console.log(`\n   🚀 Flashbots: Preparing bundle...`);
             
             // Get gas price
             const feeData = await this.provider.getFeeData();
             const maxBaseFee = feeData.maxFeePerGas;
-            const priorityFee = feeData.maxPriorityFeePerGas;
+            const priorityFee = feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei');
             
             // Create flush transaction
             const flushTx = await this.flushContract.flushEntryQueue.populateTransaction();
@@ -295,9 +347,7 @@ class ProfessionalFlashbotsBot {
                 }
             ]);
             
-            console.log('   ✅ Bundle signed');
-            console.log(`   Target block: ${targetBlockNumber}`);
-            console.log(`   Gas: ${ethers.formatUnits(maxBaseFee, 'gwei')} Gwei`);
+            console.log(`   📦 Flashbots: Bundle signed for block ${targetBlockNumber}`);
             
             // Submit to Flashbots
             const bundleSubmission = await this.flashbotsProvider.sendRawBundle(
@@ -307,30 +357,32 @@ class ProfessionalFlashbotsBot {
             
             this.stats.bundlesSubmitted++;
             
-            console.log('   📤 Bundle submitted to Flashbots');
-            console.log(`   Bundle Hash: ${bundleSubmission.bundleHash}`);
+            console.log(`   📤 Flashbots: Bundle submitted`);
+            console.log(`   Hash: ${bundleSubmission.bundleHash}`);
             
-            // Wait for inclusion
-            console.log('   ⏳ Waiting for bundle inclusion...');
+            // Wait for inclusion (with timeout)
+            console.log(`   ⏳ Flashbots: Waiting for inclusion...`);
             
-            const waitResponse = await bundleSubmission.wait();
+            const waitResponse = await Promise.race([
+                bundleSubmission.wait(),
+                new Promise((resolve) => setTimeout(() => resolve(-1), 30000)) // 30s timeout
+            ]);
             
             if (waitResponse === 0) {
-                console.log('   ✅ BUNDLE INCLUDED IN BLOCK!');
+                console.log(`   ✅ Flashbots: BUNDLE INCLUDED!`);
                 this.stats.bundlesIncluded++;
                 this.stats.flushSuccess++;
                 return true;
-            } else if (waitResponse === 1) {
-                console.log('   ⚠️  Bundle not included (block passed)');
+            } else if (waitResponse === -1) {
+                console.log(`   ⏱️  Flashbots: Timeout (30s)`);
                 return false;
             } else {
-                console.log('   ⚠️  Bundle not included (unknown reason)');
+                console.log(`   ⚠️  Flashbots: Not included (waitResponse: ${waitResponse})`);
                 return false;
             }
             
         } catch (error) {
-            console.error('   ❌ Flashbots bundle error:', error.message);
-            this.stats.flushFailed++;
+            console.error(`   ❌ Flashbots error: ${error.message}`);
             return false;
         }
     }
@@ -423,17 +475,31 @@ class ProfessionalFlashbotsBot {
                     console.log(`   Current block: ${blockPrediction.current}`);
                     console.log(`   Predicted target: ${blockPrediction.predicted} (in ${blockPrediction.blocksAway} blocks)`);
                     
-                    // Submit Flashbots bundle
-                    const success = await this.submitFlashbotsBundle(blockPrediction.predicted);
+                    // DUAL STRATEGY: Try both Flashbots AND direct tx
+                    console.log(`\n🚀 Strategy: Flashbots bundle + Direct TX fallback`);
                     
-                    if (success) {
+                    // 1. Submit Flashbots bundle (non-blocking)
+                    const flashbotsPromise = this.submitFlashbotsBundle(blockPrediction.predicted);
+                    
+                    // 2. Wait for target block to be close
+                    await this.sleep(Math.max(0, timeUntilNext - 5) * 1000); // Wait until 5s before
+                    
+                    // 3. Send direct transaction as backup
+                    console.log(`\n💨 Sending direct transaction as backup...`);
+                    const directSuccess = await this.sendDirectTransaction();
+                    
+                    // 4. Check Flashbots result
+                    const flashbotsSuccess = await flashbotsPromise;
+                    
+                    if (flashbotsSuccess || directSuccess) {
                         this.lastFlushEpoch = nextEpoch.epoch;
-                        console.log(`   🎉 SUCCESS! Flushed epoch ${nextEpoch.epoch}\n`);
+                        console.log(`   🎉 SUCCESS! Flushed epoch ${nextEpoch.epoch}`);
+                        console.log(`   Method: ${flashbotsSuccess ? '🚀 Flashbots' : '💨 Direct TX'}\n`);
                         
                         // Auto-claim if needed
                         await this.checkClaim();
                     } else {
-                        console.log(`   ⚠️  Bundle not included, will retry next epoch\n`);
+                        console.log(`   ⚠️  Both methods failed, will retry next epoch\n`);
                     }
                     
                     this.isProcessing = false;

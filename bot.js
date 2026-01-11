@@ -212,7 +212,7 @@ class UltraAggressiveBot {
         }
     }
 
-    // WebSocket block handler
+    // WebSocket block handler - INSTANT epoch detection
     async onNewBlock(blockNumber) {
         if (this.isProcessing) return;
         
@@ -220,18 +220,24 @@ class UltraAggressiveBot {
         const info = await this.getEpochInfo();
         if (!info) return;
         
-        // Detect epoch change
+        // Detect NEW epoch change via WebSocket (fastest possible)
         if (info.epoch !== this.currentEpoch) {
+            const oldEpoch = this.currentEpoch;
             this.currentEpoch = info.epoch;
             this.stats.epochChanges++;
             
-            console.log(`\n🔔 NEW EPOCH DETECTED: ${info.epoch} (Block: ${blockNumber})`);
+            console.log(`\n🔔 WEBSOCKET: NEW EPOCH ${info.epoch}! (Block: ${blockNumber})`);
             
-            // INSTANT FLUSH on epoch change!
+            // INSTANT FLUSH on new epoch - SABSE PEHLE!
             if (this.lastFlushEpoch !== info.epoch) {
-                console.log('🚀 INSTANT FLUSH MODE ACTIVATED!');
-                await this.sleep(CONFIG.INSTANT_INTERVAL); // 0.001s
+                console.log('⚡ WEBSOCKET INSTANT FLUSH - 0.001s RESPONSE!');
+                await this.sleep(CONFIG.INSTANT_INTERVAL); // 0.001s only!
+                
+                const flushStart = Date.now();
                 await this.attemptFlush(info, true);
+                const flushTime = Date.now() - flushStart;
+                
+                console.log(`   ⚡ Total response time: ${flushTime}ms from epoch change!`);
             }
         }
     }
@@ -394,6 +400,8 @@ class UltraAggressiveBot {
         console.log('Press Ctrl+C to stop\n');
         console.log('━'.repeat(60));
         
+        let readyForNewEpoch = false;
+        
         while (true) {
             try {
                 const info = await this.getEpochInfo();
@@ -402,11 +410,21 @@ class UltraAggressiveBot {
                     continue;
                 }
                 
-                // Update epoch tracking
+                // Detect NEW epoch change
                 if (info.epoch !== this.currentEpoch) {
+                    const oldEpoch = this.currentEpoch;
                     this.currentEpoch = info.epoch;
                     this.stats.epochChanges++;
-                    console.log(`\n🔔 Epoch ${info.epoch} started`);
+                    
+                    console.log(`\n🔔 NEW EPOCH DETECTED: ${info.epoch} (Previous: ${oldEpoch})`);
+                    
+                    // INSTANT FLUSH on new epoch if we were ready!
+                    if (readyForNewEpoch && this.lastFlushEpoch !== info.epoch) {
+                        console.log('🚀 INSTANT FLUSH MODE - NEW EPOCH START!');
+                        await this.sleep(CONFIG.INSTANT_INTERVAL); // 0.001s
+                        await this.attemptFlush(info, true);
+                        readyForNewEpoch = false;
+                    }
                 }
                 
                 // Adjust speed based on progress
@@ -417,9 +435,15 @@ class UltraAggressiveBot {
                     this.showStatus(info);
                 }
                 
-                // Attempt flush in ultra-fast mode (97%+)
-                if (info.progress >= CONFIG.ULTRA_THRESHOLD && this.lastFlushEpoch !== info.epoch) {
-                    await this.attemptFlush(info);
+                // At 97%+ prepare for next epoch but DON'T flush current epoch
+                if (info.progress >= CONFIG.ULTRA_THRESHOLD) {
+                    if (!readyForNewEpoch) {
+                        console.log(`\n⏳ READY MODE: Waiting for NEW epoch to start...`);
+                        console.log(`   Current epoch ${info.epoch} at ${(info.progress*100).toFixed(1)}%`);
+                        console.log(`   Will flush NEW epoch ${info.epoch + 1} instantly!`);
+                        readyForNewEpoch = true;
+                    }
+                    // Don't flush current epoch, just wait
                 }
                 
                 await this.sleep(this.currentInterval);

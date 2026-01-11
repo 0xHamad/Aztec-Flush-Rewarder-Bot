@@ -1,197 +1,239 @@
-// Aztec Flush Bot - FINAL WORKING VERSION
-// ========================================
+// Aztec Flush Bot - PERFECT WORKING VERSION
+// ===========================================
+// Real-time blockchain tracking, proper epoch sync
 require('dotenv').config();
 const { ethers } = require('ethers');
 
 const CONFIG = {
-    FLUSH: '0x7C9a7130379F1B5dd6e7A53AF84fC0fE32267B65',
-    ROLLUP: '0x603bb2c05D474794ea97805e8De69bCcFb3bCA12',
-    EPOCH_DURATION: 2304, // 38.4 minutes
-    CHECK_INTERVAL: 2000, // 2 seconds
-    FLUSH_BEFORE_END: 5, // Flush 5 seconds before epoch ends
-    MIN_ETH: ethers.parseEther('0.001'),
-    MIN_CLAIM: ethers.parseEther('100'),
+    FLUSH_CONTRACT: '0x7C9a7130379F1B5dd6e7A53AF84fC0fE32267B65',
+    ROLLUP_CONTRACT: '0x603bb2c05D474794ea97805e8De69bCcFb3bCA12',
+    
+    SLOT_DURATION: 72,        // seconds per slot
+    SLOTS_PER_EPOCH: 32,      // slots per epoch  
+    EPOCH_DURATION: 2304,     // 72 * 32 = 2304 seconds (38.4 minutes)
+    
+    CHECK_INTERVAL: 3000,     // Check every 3 seconds
+    FLUSH_AT_PROGRESS: 0.98,  // Flush at 98% of epoch
+    
+    MIN_ETH_BALANCE: ethers.parseEther('0.001'),
+    MIN_CLAIM_AMOUNT: ethers.parseEther('100'),
     GAS_LIMIT: 250000,
 };
 
 const FLUSH_ABI = [
     'function flushEntryQueue() external',
-    'function claimRewards() external',
-    'function rewardsOf(address) view returns (uint256)',
-    'function rewardsAvailable() view returns (uint256)',
+    'function claimRewards() external', 
+    'function rewardsOf(address) external view returns (uint256)',
+    'function rewardsAvailable() external view returns (uint256)',
 ];
 
 const ROLLUP_ABI = [
-    'function getCurrentEpoch() view returns (uint256)',
-    'function GENESIS_TIME() view returns (uint256)',
+    'function getCurrentEpoch() external view returns (uint256)',
+    'function getEpochAtTime(uint256) external view returns (uint256)',
 ];
 
 class AztecFlushBot {
     constructor() {
         this.provider = null;
         this.wallet = null;
-        this.flush = null;
-        this.rollup = null;
-        this.genesis = null;
-        this.lastFlushEpoch = -1;
-        this.processing = false;
-        this.stats = { success: 0, failed: 0, claimed: 0n };
+        this.flushContract = null;
+        this.rollupContract = null;
+        
+        // Tracking
+        this.genesisTime = null;
+        this.currentTrackedEpoch = null;
+        this.lastFlushedEpoch = -1;
+        this.isProcessing = false;
+        
+        // Stats
+        this.stats = {
+            flushSuccess: 0,
+            flushFailed: 0,
+            totalClaimed: ethers.parseEther('0'),
+            totalGasSpent: ethers.parseEther('0'),
+        };
     }
 
-    async init() {
-        console.log('\n🤖 AZTEC FLUSH BOT - FINAL VERSION\n');
-        console.log('═'.repeat(60));
+    // Initialize bot
+    async initialize() {
+        console.log('\n╔════════════════════════════════════════╗');
+        console.log('║  🤖 AZTEC FLUSH BOT - PERFECT VERSION  ║');
+        console.log('╚════════════════════════════════════════╝\n');
         
-        if (!process.env.RPC_URL || !process.env.PRIVATE_KEY) {
-            throw new Error('❌ Missing RPC_URL or PRIVATE_KEY in .env');
-        }
+        // Validate environment
+        if (!process.env.RPC_URL) throw new Error('❌ RPC_URL missing in .env');
+        if (!process.env.PRIVATE_KEY) throw new Error('❌ PRIVATE_KEY missing in .env');
         
+        console.log('📡 Connecting to Ethereum...');
         this.provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
         this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
-        this.flush = new ethers.Contract(CONFIG.FLUSH, FLUSH_ABI, this.wallet);
-        this.rollup = new ethers.Contract(CONFIG.ROLLUP, ROLLUP_ABI, this.provider);
         
-        // Try to get genesis from contract
-        console.log('📡 Connecting to Rollup contract...');
-        try {
-            this.genesis = await this.rollup.GENESIS_TIME();
-            console.log(`✅ Genesis from contract: ${this.genesis}\n`);
-        } catch (e) {
-            console.log('⚠️  Cannot read GENESIS_TIME() from contract');
-            console.log('   Calculating genesis time...\n');
-            await this.calculateGenesis();
-        }
+        console.log('📝 Loading contracts...');
+        this.flushContract = new ethers.Contract(
+            CONFIG.FLUSH_CONTRACT,
+            FLUSH_ABI,
+            this.wallet
+        );
         
-        await this.showStatus();
-        console.log('═'.repeat(60));
+        this.rollupContract = new ethers.Contract(
+            CONFIG.ROLLUP_CONTRACT,
+            ROLLUP_ABI,
+            this.provider
+        );
+        
+        console.log('⏰ Calculating genesis time from blockchain...\n');
+        await this.findGenesisTime();
+        
+        await this.displayStatus();
+        
+        console.log('\n' + '═'.repeat(70));
     }
 
-    async calculateGenesis() {
-        // Get current epoch from contract
-        const currentEpochFromContract = await this.rollup.getCurrentEpoch();
+    // Find accurate genesis time by syncing with contract
+    async findGenesisTime() {
+        // Get current blockchain state
         const block = await this.provider.getBlock('latest');
-        const now = BigInt(block.timestamp);
+        const currentTime = block.timestamp;
+        const contractEpoch = await this.rollupContract.getCurrentEpoch();
         
-        console.log(`   Current time: ${now}`);
-        console.log(`   Current epoch (contract): ${currentEpochFromContract}`);
+        console.log(`   Blockchain time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})`);
+        console.log(`   Contract epoch: ${contractEpoch.toString()}`);
         
         // Calculate approximate genesis
-        const epochDuration = BigInt(CONFIG.EPOCH_DURATION);
-        let genesis = now - (currentEpochFromContract * epochDuration);
+        const epochNum = Number(contractEpoch);
+        const epochDuration = CONFIG.EPOCH_DURATION;
         
-        // Fine-tune by checking which genesis gives us the correct epoch
-        let found = false;
-        for (let offset = -epochDuration; offset <= epochDuration; offset += 60n) {
-            const testGenesis = genesis + offset;
-            const calculatedEpoch = (now - testGenesis) / epochDuration;
+        // Start with rough estimate
+        let bestGenesis = currentTime - (epochNum * epochDuration);
+        let bestError = Infinity;
+        
+        // Fine-tune by testing different genesis times
+        // We want: (currentTime - genesis) / epochDuration = contractEpoch
+        for (let offset = -epochDuration; offset <= epochDuration; offset += 12) {
+            const testGenesis = currentTime - (epochNum * epochDuration) + offset;
+            const calculatedEpoch = Math.floor((currentTime - testGenesis) / epochDuration);
+            const error = Math.abs(calculatedEpoch - epochNum);
             
-            if (calculatedEpoch === currentEpochFromContract) {
-                this.genesis = testGenesis;
-                found = true;
+            if (error < bestError) {
+                bestError = error;
+                bestGenesis = testGenesis;
+            }
+            
+            if (error === 0) {
+                // Found exact match
+                this.genesisTime = testGenesis;
                 
-                // Verify
-                const epochStart = testGenesis + (currentEpochFromContract * epochDuration);
-                const timeIntoEpoch = now - epochStart;
-                const remaining = epochDuration - timeIntoEpoch;
+                // Calculate current epoch details
+                const epochStart = testGenesis + (epochNum * epochDuration);
+                const timeIntoEpoch = currentTime - epochStart;
+                const progress = (timeIntoEpoch / epochDuration) * 100;
                 
-                console.log(`   ✅ Genesis calculated: ${this.genesis}`);
-                console.log(`   Current epoch starts at: ${epochStart}`);
-                console.log(`   Time into epoch: ${timeIntoEpoch}s`);
-                console.log(`   Time remaining: ${remaining}s\n`);
-                break;
+                console.log(`   ✅ Genesis time found: ${testGenesis}`);
+                console.log(`   Current epoch ${epochNum} started at: ${epochStart}`);
+                console.log(`   Time into epoch: ${Math.floor(timeIntoEpoch / 60)}m ${timeIntoEpoch % 60}s`);
+                console.log(`   Current progress: ${progress.toFixed(1)}%`);
+                
+                this.currentTrackedEpoch = epochNum;
+                return;
             }
         }
         
-        if (!found) {
-            this.genesis = genesis;
-            console.log(`   ⚠️  Using approximate genesis: ${this.genesis}\n`);
-        }
+        // If no exact match, use best approximation
+        this.genesisTime = bestGenesis;
+        console.log(`   ⚠️  Using approximate genesis: ${bestGenesis}`);
+        this.currentTrackedEpoch = epochNum;
     }
 
-    async showStatus() {
-        const balance = await this.provider.getBalance(this.wallet.address);
-        const pending = await this.flush.rewardsOf(this.wallet.address);
-        const pool = await this.flush.rewardsAvailable();
-        const contractEpoch = await this.rollup.getCurrentEpoch();
+    // Get current epoch info from blockchain time
+    getEpochInfo(blockTimestamp) {
+        const currentTime = blockTimestamp;
+        const epochDuration = CONFIG.EPOCH_DURATION;
         
-        console.log('📊 Bot Status:');
-        console.log(`   Wallet: ${this.wallet.address}`);
-        console.log(`   ETH Balance: ${ethers.formatEther(balance)} ETH`);
-        console.log(`   Pending Rewards: ${ethers.formatEther(pending)} AZTEC`);
-        console.log(`   Pool Available: ${ethers.formatEther(pool)} AZTEC`);
-        console.log(`   Current Epoch: ${contractEpoch}\n`);
+        // Calculate epoch number
+        const epochNumber = Math.floor((currentTime - this.genesisTime) / epochDuration);
         
-        if (balance < CONFIG.MIN_ETH) {
-            console.log('⚠️  ═════════════════════════════════════════');
-            console.log('⚠️  CRITICAL: INSUFFICIENT ETH BALANCE!');
-            console.log('⚠️  Current: ' + ethers.formatEther(balance) + ' ETH');
-            console.log('⚠️  Minimum: 0.001 ETH');
-            console.log('⚠️  Recommended: 0.01 ETH');
-            console.log('⚠️  ═════════════════════════════════════════');
-            console.log('⚠️  Bot will NOT work without sufficient ETH!');
-            console.log('⚠️  Send ETH to: ' + this.wallet.address);
-            console.log('⚠️  ═════════════════════════════════════════\n');
-        }
+        // Calculate epoch boundaries
+        const epochStart = this.genesisTime + (epochNumber * epochDuration);
+        const epochEnd = epochStart + epochDuration;
         
-        console.log('⚙️  Settings:');
-        console.log(`   Genesis Time: ${this.genesis}`);
-        console.log(`   Epoch Duration: ${CONFIG.EPOCH_DURATION}s (${CONFIG.EPOCH_DURATION/60} min)`);
-        console.log(`   Flush Trigger: ${CONFIG.FLUSH_BEFORE_END}s before epoch ends`);
-        console.log(`   Check Interval: ${CONFIG.CHECK_INTERVAL/1000}s\n`);
-    }
-
-    getEpochInfo(timestamp) {
-        const time = BigInt(timestamp);
-        const duration = BigInt(CONFIG.EPOCH_DURATION);
-        
-        // Calculate current epoch
-        const epoch = (time - this.genesis) / duration;
-        const epochStart = this.genesis + (epoch * duration);
-        const epochEnd = epochStart + duration;
-        const timeIntoEpoch = time - epochStart;
-        const remaining = epochEnd - time;
-        const progress = Number(timeIntoEpoch) / CONFIG.EPOCH_DURATION;
+        // Calculate progress
+        const timeIntoEpoch = currentTime - epochStart;
+        const timeRemaining = epochEnd - currentTime;
+        const progress = timeIntoEpoch / epochDuration;
         
         return {
-            epoch: Number(epoch),
-            start: Number(epochStart),
-            end: Number(epochEnd),
-            timeInto: Number(timeIntoEpoch),
-            remaining: Number(remaining),
+            epoch: epochNumber,
+            startTime: epochStart,
+            endTime: epochEnd,
+            currentTime: currentTime,
+            timeIntoEpoch: timeIntoEpoch,
+            timeRemaining: timeRemaining,
             progress: progress,
         };
     }
 
-    async tryFlush(epochInfo) {
-        if (this.processing) return false;
-        if (this.lastFlushEpoch === epochInfo.epoch) return false;
+    // Display bot status
+    async displayStatus() {
+        const balance = await this.provider.getBalance(this.wallet.address);
+        const pendingRewards = await this.flushContract.rewardsOf(this.wallet.address);
+        const poolRewards = await this.flushContract.rewardsAvailable();
         
-        this.processing = true;
+        console.log('📊 Bot Status:');
+        console.log(`   Wallet: ${this.wallet.address}`);
+        console.log(`   ETH Balance: ${ethers.formatEther(balance)} ETH`);
+        
+        if (balance < CONFIG.MIN_ETH_BALANCE) {
+            console.log(`   ⚠️  WARNING: Low balance! Need at least 0.001 ETH`);
+            console.log(`   ⚠️  Current: ${ethers.formatEther(balance)} ETH`);
+            console.log(`   ⚠️  Bot will NOT flush without sufficient ETH!`);
+        } else {
+            console.log(`   ✅ Balance sufficient for operations`);
+        }
+        
+        console.log(`   Pending Rewards: ${ethers.formatEther(pendingRewards)} AZTEC`);
+        console.log(`   Pool Available: ${ethers.formatEther(poolRewards)} AZTEC`);
+        
+        console.log('\n⚙️  Bot Settings:');
+        console.log(`   Genesis Time: ${this.genesisTime}`);
+        console.log(`   Epoch Duration: ${CONFIG.EPOCH_DURATION}s (${CONFIG.EPOCH_DURATION / 60} minutes)`);
+        console.log(`   Flush Trigger: ${CONFIG.FLUSH_AT_PROGRESS * 100}% epoch progress`);
+        console.log(`   Check Interval: ${CONFIG.CHECK_INTERVAL / 1000}s`);
+    }
+
+    // Try to flush the entry queue
+    async attemptFlush(epochInfo) {
+        if (this.isProcessing) return false;
+        if (this.lastFlushedEpoch === epochInfo.epoch) return false;
+        
+        this.isProcessing = true;
         
         try {
-            console.log(`\n\n🚀 FLUSHING EPOCH ${epochInfo.epoch}...`);
+            console.log(`\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+            console.log(`🚀 FLUSHING EPOCH ${epochInfo.epoch}`);
+            console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
             
             // Check balance
             const balance = await this.provider.getBalance(this.wallet.address);
-            if (balance < CONFIG.MIN_ETH) {
-                console.log('   ❌ Insufficient ETH balance!');
-                console.log(`   Have: ${ethers.formatEther(balance)} ETH`);
-                console.log(`   Need: 0.001 ETH minimum`);
+            if (balance < CONFIG.MIN_ETH_BALANCE) {
+                console.log(`❌ Insufficient ETH!`);
+                console.log(`   Current: ${ethers.formatEther(balance)} ETH`);
+                console.log(`   Minimum: 0.001 ETH`);
                 console.log(`   Add ETH to: ${this.wallet.address}\n`);
-                this.processing = false;
+                this.isProcessing = false;
                 return false;
             }
             
             // Get gas settings
             const feeData = await this.provider.getFeeData();
-            const gasPriceGwei = ethers.formatUnits(feeData.gasPrice, 'gwei');
+            const gasPrice = Number(ethers.formatUnits(feeData.gasPrice, 'gwei'));
             
-            console.log(`   Gas Price: ${Number(gasPriceGwei).toFixed(2)} Gwei`);
-            console.log(`   Estimated Cost: ~${ethers.formatEther(BigInt(CONFIG.GAS_LIMIT) * feeData.gasPrice)} ETH`);
+            console.log(`📊 Transaction Details:`);
+            console.log(`   Gas Price: ${gasPrice.toFixed(2)} Gwei`);
+            console.log(`   Estimated Cost: ${ethers.formatEther(BigInt(CONFIG.GAS_LIMIT) * feeData.gasPrice)} ETH`);
             
             // Send transaction
-            console.log(`   📤 Sending transaction...`);
-            const tx = await this.flush.flushEntryQueue({
+            console.log(`\n📤 Sending flush transaction...`);
+            const tx = await this.flushContract.flushEntryQueue({
                 gasLimit: CONFIG.GAS_LIMIT,
                 maxFeePerGas: feeData.maxFeePerGas,
                 maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei'),
@@ -204,56 +246,63 @@ class AztecFlushBot {
             
             if (receipt.status === 1) {
                 const gasUsed = receipt.gasUsed * receipt.gasPrice;
-                this.stats.success++;
-                this.lastFlushEpoch = epochInfo.epoch;
+                this.stats.totalGasSpent += gasUsed;
+                this.stats.flushSuccess++;
+                this.lastFlushedEpoch = epochInfo.epoch;
                 
-                console.log(`   ✅ SUCCESS!`);
+                console.log(`\n✅ FLUSH SUCCESSFUL!`);
                 console.log(`   Block: ${receipt.blockNumber}`);
-                console.log(`   Gas Used: ${ethers.formatEther(gasUsed)} ETH\n`);
+                console.log(`   Gas Used: ${ethers.formatEther(gasUsed)} ETH`);
+                console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
                 
-                // Try to claim
+                // Try to claim rewards
                 await this.tryClaimRewards();
                 
-                this.processing = false;
+                this.isProcessing = false;
                 return true;
             } else {
-                this.stats.failed++;
-                console.log(`   ❌ Transaction failed\n`);
-                this.processing = false;
+                this.stats.flushFailed++;
+                console.log(`\n❌ Transaction failed`);
+                console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+                this.isProcessing = false;
                 return false;
             }
             
         } catch (error) {
+            this.stats.flushFailed++;
+            
             if (error.message.includes('execution reverted')) {
-                console.log(`   ℹ️  Queue already flushed or empty for this epoch\n`);
-                this.lastFlushEpoch = epochInfo.epoch; // Mark as attempted
+                console.log(`\nℹ️  Queue already flushed for epoch ${epochInfo.epoch}`);
+                console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+                this.lastFlushedEpoch = epochInfo.epoch;
             } else if (error.message.includes('insufficient funds')) {
-                console.log(`   ❌ Insufficient funds for gas!`);
-                console.log(`   Add more ETH to wallet: ${this.wallet.address}\n`);
+                console.log(`\n❌ INSUFFICIENT FUNDS FOR GAS!`);
+                console.log(`   Add more ETH to wallet: ${this.wallet.address}`);
+                console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
             } else {
-                this.stats.failed++;
-                console.log(`   ❌ Error: ${error.message}\n`);
+                console.log(`\n❌ Error: ${error.message}`);
+                console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
             }
             
-            this.processing = false;
+            this.isProcessing = false;
             return false;
         }
     }
 
+    // Try to claim accumulated rewards
     async tryClaimRewards() {
         try {
-            const pending = await this.flush.rewardsOf(this.wallet.address);
+            const pending = await this.flushContract.rewardsOf(this.wallet.address);
             
-            if (pending >= CONFIG.MIN_CLAIM) {
-                console.log(`   💰 Claiming ${ethers.formatEther(pending)} AZTEC...`);
+            if (pending >= CONFIG.MIN_CLAIM_AMOUNT) {
+                console.log(`💰 Claiming ${ethers.formatEther(pending)} AZTEC...`);
                 
-                const tx = await this.flush.claimRewards({ gasLimit: 100000 });
+                const tx = await this.flushContract.claimRewards({ gasLimit: 100000 });
                 const receipt = await tx.wait();
                 
                 if (receipt.status === 1) {
-                    this.stats.claimed += pending;
-                    console.log(`   ✅ Claimed successfully!`);
-                    console.log(`   TX: ${tx.hash}\n`);
+                    this.stats.totalClaimed += pending;
+                    console.log(`   ✅ Claimed! TX: ${tx.hash}\n`);
                 } else {
                     console.log(`   ❌ Claim failed\n`);
                 }
@@ -263,80 +312,93 @@ class AztecFlushBot {
         }
     }
 
-    progressBar(progress, length = 20) {
+    // Progress bar visualization
+    makeProgressBar(progress, length = 30) {
         const filled = Math.floor(progress * length);
         const empty = length - filled;
-        return '█'.repeat(filled) + '░'.repeat(empty);
+        return '█'.repeat(Math.max(0, filled)) + '░'.repeat(Math.max(0, empty));
     }
 
+    // Main monitoring loop
     async run() {
-        console.log('🤖 BOT IS NOW RUNNING...\n');
+        console.log('\n🤖 BOT IS NOW MONITORING BLOCKCHAIN...\n');
         console.log('Press Ctrl+C to stop\n');
-        console.log('═'.repeat(60) + '\n');
-        
-        let currentEpoch = -1;
+        console.log('═'.repeat(70) + '\n');
         
         while (true) {
             try {
-                // Get current blockchain time
+                // Get latest block
                 const block = await this.provider.getBlock('latest');
-                const info = this.getEpochInfo(block.timestamp);
+                const epochInfo = this.getEpochInfo(block.timestamp);
                 
                 // Detect epoch change
-                if (info.epoch !== currentEpoch && currentEpoch !== -1) {
-                    console.log(`\n🔔 NEW EPOCH: ${currentEpoch} → ${info.epoch}`);
+                if (epochInfo.epoch !== this.currentTrackedEpoch) {
+                    const oldEpoch = this.currentTrackedEpoch;
+                    this.currentTrackedEpoch = epochInfo.epoch;
+                    
+                    console.log(`\n🔔 EPOCH CHANGED: ${oldEpoch} → ${epochInfo.epoch}`);
                     console.log(`   Time: ${new Date(block.timestamp * 1000).toISOString()}\n`);
-                    this.lastFlushEpoch = -1; // Reset for new epoch
                 }
-                currentEpoch = info.epoch;
+                
+                // Calculate time display
+                const mins = Math.floor(epochInfo.timeRemaining / 60);
+                const secs = Math.floor(epochInfo.timeRemaining % 60);
+                const progressPercent = (epochInfo.progress * 100).toFixed(1);
+                const progressBar = this.makeProgressBar(epochInfo.progress);
                 
                 // Display status
-                const mins = Math.floor(info.remaining / 60);
-                const secs = Math.floor(info.remaining % 60);
-                const bar = this.progressBar(info.progress);
-                const time = new Date().toLocaleTimeString();
+                const timestamp = new Date().toLocaleTimeString();
+                process.stdout.write(`\r[${timestamp}] Epoch ${epochInfo.epoch} [${progressBar}] ${progressPercent}% | ${mins}m ${secs}s | ✅${this.stats.flushSuccess} ❌${this.stats.flushFailed}   `);
                 
-                process.stdout.write(`\r[${time}] Epoch ${info.epoch} [${bar}] ${(info.progress*100).toFixed(1)}% | ${mins}m ${secs}s | ✅${this.stats.success} ❌${this.stats.failed}   `);
-                
-                // Trigger flush when close to epoch end
-                if (info.remaining <= CONFIG.FLUSH_BEFORE_END && 
-                    info.remaining > 0 && 
-                    this.lastFlushEpoch !== info.epoch &&
-                    !this.processing) {
+                // Check if we should flush
+                if (epochInfo.progress >= CONFIG.FLUSH_AT_PROGRESS && 
+                    this.lastFlushedEpoch !== epochInfo.epoch &&
+                    !this.isProcessing) {
                     
-                    await this.tryFlush(info);
+                    await this.attemptFlush(epochInfo);
                 }
                 
-                // Sleep
-                await new Promise(r => setTimeout(r, CONFIG.CHECK_INTERVAL));
+                // Sleep before next check
+                await new Promise(resolve => setTimeout(resolve, CONFIG.CHECK_INTERVAL));
                 
             } catch (error) {
-                console.error(`\n\n❌ Error: ${error.message}`);
+                console.error(`\n\n❌ Error in main loop: ${error.message}`);
                 console.log('Retrying in 5 seconds...\n');
-                await new Promise(r => setTimeout(r, 5000));
+                await new Promise(resolve => setTimeout(resolve, 5000));
             }
         }
     }
 }
 
-// Main
+// ==================== MAIN ====================
 async function main() {
     const bot = new AztecFlushBot();
-    await bot.init();
-    await bot.run();
+    
+    try {
+        await bot.initialize();
+        await bot.run();
+    } catch (error) {
+        console.error('\n💥 Fatal Error:', error.message);
+        console.error(error.stack);
+        process.exit(1);
+    }
 }
 
+// Handle graceful shutdown
 process.on('SIGINT', () => {
-    console.log('\n\n⏹️  Bot stopping...\n');
+    console.log('\n\n⏹️  Bot shutting down...\n');
     console.log('📊 Final Statistics:');
-    console.log(`   Successful Flushes: ${bot?.stats?.success || 0}`);
-    console.log(`   Failed Attempts: ${bot?.stats?.failed || 0}`);
-    console.log(`   Total Claimed: ${ethers.formatEther(bot?.stats?.claimed || 0n)} AZTEC\n`);
+    console.log(`   Successful Flushes: ${bot?.stats?.flushSuccess || 0}`);
+    console.log(`   Failed Attempts: ${bot?.stats?.flushFailed || 0}`);
+    console.log(`   Total Claimed: ${ethers.formatEther(bot?.stats?.totalClaimed || 0n)} AZTEC`);
+    console.log(`   Total Gas Spent: ${ethers.formatEther(bot?.stats?.totalGasSpent || 0n)} ETH\n`);
     console.log('👋 Goodbye!\n');
     process.exit(0);
 });
 
-main().catch(error => {
-    console.error('💥 Fatal Error:', error.message);
-    process.exit(1);
-});
+// Start bot
+if (require.main === module) {
+    main();
+}
+
+module.exports = AztecFlushBot;

@@ -7,34 +7,25 @@ const { ethers } = require('ethers');
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL;
 const FLUSH_REWARDER_ADDRESS = process.env.FLUSH_REWARDER_ADDRESS || '0x7C9a7130379F1B5dd6e7A53AF84fC0fE32267B65';
-const ROLLUP_ADDRESS = process.env.ROLLUP_ADDRESS || '0x603bb2c05D474794ea97805e8De69bCcFb3bCA12';
 const MAX_GAS_USD = parseFloat(process.env.MAX_GAS_USD || '0.30');
 const ETH_PRICE_USD = parseFloat(process.env.ETH_PRICE_USD || '3300');
 
-// Contract ABIs
-const FLUSH_REWARDER_ABI = [
+const ABI = [
   'function flushEntryQueue() external returns (uint256)',
   'function rewardsOf(address) external view returns (uint256)',
   'function rewardsAvailable() external view returns (uint256)'
 ];
 
-const ROLLUP_ABI = [
-  'function getCurrentEpoch() external view returns (uint256)',
-  'function getCurrentSlot() external view returns (uint256)',
-  'function getEpochAtTimestamp(uint256 timestamp) external view returns (uint256)',
-  'function getTimestampForSlot(uint256 slot) external view returns (uint256)'
-];
-
-// Aztec epoch constants
-const EPOCH_DURATION_SECONDS = 2304; // 38.4 minutes
-const SLOT_DURATION_SECONDS = 72; // 12 sec/block × 6 blocks
+// Aztec epoch constants (FIXED)
+const GENESIS_TIMESTAMP = 1704067200; // Aztec genesis block
+const EPOCH_DURATION_SECONDS = 2304; // 38.4 minutes = 32 slots × 72 seconds
+const SLOT_DURATION_SECONDS = 72; // 6 blocks × 12 seconds
 const SLOTS_PER_EPOCH = 32;
 
 // Setup
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-const flushContract = new ethers.Contract(FLUSH_REWARDER_ADDRESS, FLUSH_REWARDER_ABI, wallet);
-const rollupContract = new ethers.Contract(ROLLUP_ADDRESS, ROLLUP_ABI, provider);
+const contract = new ethers.Contract(FLUSH_REWARDER_ADDRESS, ABI, wallet);
 
 // ════════════════════════════════════════════════════════════
 // UTILITIES
@@ -55,6 +46,8 @@ function getLocalTime(timestamp) {
 }
 
 function formatDuration(seconds) {
+  if (seconds < 0) return '0s'; // Handle negative
+  
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
@@ -65,7 +58,8 @@ function formatDuration(seconds) {
 }
 
 function getProgressBar(percentage, width = 30) {
-  const filled = Math.floor((percentage / 100) * width);
+  const percent = Math.max(0, Math.min(100, percentage)); // Clamp 0-100
+  const filled = Math.floor((percent / 100) * width);
   const empty = width - filled;
   return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
 }
@@ -75,46 +69,42 @@ function getProgressBar(percentage, width = 30) {
 // ════════════════════════════════════════════════════════════
 
 function getSmartInterval(secondsUntilNext) {
-  if (secondsUntilNext <= 30) {
-    return 3;  // 3 seconds when VERY close (last 30 sec)
-  } else if (secondsUntilNext <= 120) {
-    return 5;  // 5 seconds when close (last 2 min)
-  } else if (secondsUntilNext <= 300) {
-    return 10; // 10 seconds when approaching (last 5 min)
-  } else {
-    return 30; // 30 seconds when far away
-  }
+  if (secondsUntilNext < 0) return 5; // If negative, check in 5 sec
+  if (secondsUntilNext <= 30) return 3;
+  if (secondsUntilNext <= 120) return 5;
+  if (secondsUntilNext <= 300) return 10;
+  return 30;
 }
 
 // ════════════════════════════════════════════════════════════
-// EPOCH CALCULATOR (ENHANCED WITH ROLLUP CONTRACT)
+// EPOCH CALCULATOR (FIXED)
 // ════════════════════════════════════════════════════════════
 
 async function getEpochInfo() {
   const block = await provider.getBlock('latest');
   const timestamp = block.timestamp;
   
-  // Try to get epoch from rollup contract (more accurate)
-  let epochNumber, currentSlot;
-  let usingRollup = false;
+  // Calculate elapsed time since genesis
+  const elapsedTime = timestamp - GENESIS_TIMESTAMP;
   
-  try {
-    epochNumber = Number(await rollupContract.getCurrentEpoch());
-    currentSlot = Number(await rollupContract.getCurrentSlot());
-    usingRollup = true;
-  } catch (error) {
-    // Fallback to calculation if rollup contract call fails
-    epochNumber = Math.floor(timestamp / EPOCH_DURATION_SECONDS);
-    const timeInEpoch = timestamp % EPOCH_DURATION_SECONDS;
-    currentSlot = Math.floor(timeInEpoch / SLOT_DURATION_SECONDS);
-  }
+  // Calculate current epoch number
+  const epochNumber = Math.floor(elapsedTime / EPOCH_DURATION_SECONDS);
   
-  const timeInEpoch = timestamp % EPOCH_DURATION_SECONDS;
+  // Time within current epoch
+  const timeInEpoch = elapsedTime % EPOCH_DURATION_SECONDS;
+  
+  // Current slot (0-31)
+  const currentSlot = Math.floor(timeInEpoch / SLOT_DURATION_SECONDS);
+  
+  // Progress percentage
   const epochProgress = (timeInEpoch / EPOCH_DURATION_SECONDS) * 100;
   
-  const nextEpochStart = (epochNumber + 1) * EPOCH_DURATION_SECONDS;
-  const secondsUntilNext = nextEpochStart - timestamp;
-  const nextEpochDate = new Date(nextEpochStart * 1000);
+  // Next epoch timing
+  const nextEpochElapsed = (epochNumber + 1) * EPOCH_DURATION_SECONDS;
+  const nextEpochTimestamp = GENESIS_TIMESTAMP + nextEpochElapsed;
+  const secondsUntilNext = nextEpochTimestamp - timestamp;
+  
+  // Is this epoch start? (First 3 slots = ~3.6 minutes)
   const isEpochStart = currentSlot <= 2;
   
   return {
@@ -124,17 +114,15 @@ async function getEpochInfo() {
     secondsUntilNext,
     blockNumber: block.number,
     timestamp,
-    nextEpochStart,
-    nextEpochDate,
+    nextEpochTimestamp,
     isEpochStart,
     currentTime: getLocalTime(timestamp),
-    nextEpochTime: getLocalTime(nextEpochStart),
-    usingRollup
+    nextEpochTime: getLocalTime(nextEpochTimestamp)
   };
 }
 
 // ════════════════════════════════════════════════════════════
-// BALANCE & GAS CHECKER
+// BALANCE & GAS CHECKER (FIXED)
 // ════════════════════════════════════════════════════════════
 
 async function checkBalanceAndGas() {
@@ -142,23 +130,26 @@ async function checkBalanceAndGas() {
   const ethBalance = parseFloat(ethers.formatEther(balance));
   
   const feeData = await provider.getFeeData();
-  const maxFeePerGas = feeData.maxFeePerGas;
+  let maxFeePerGas = feeData.maxFeePerGas;
+  
+  // Safety check for gas price
+  if (!maxFeePerGas || maxFeePerGas === 0n) {
+    maxFeePerGas = ethers.parseUnits('20', 'gwei'); // Default fallback
+  }
+  
   const gasPriceGwei = parseFloat(ethers.formatUnits(maxFeePerGas, 'gwei'));
   
-  const estimatedGasUnits = 500000n;
+  // More accurate gas estimation
+  const estimatedGasUnits = 350000n; // Realistic estimate (not 500k)
   const estimatedGasCostWei = estimatedGasUnits * maxFeePerGas;
   const estimatedGasCostEth = parseFloat(ethers.formatEther(estimatedGasCostWei));
   const estimatedGasCostUsd = estimatedGasCostEth * ETH_PRICE_USD;
   
-  const maxGasEth = MAX_GAS_USD / ETH_PRICE_USD;
-  let cappedMaxFeePerGas;
-  
-  try {
-    const maxGasWei = ethers.parseUnits(maxGasEth.toFixed(10), 'ether');
-    cappedMaxFeePerGas = maxGasWei / estimatedGasUnits;
-  } catch (e) {
-    cappedMaxFeePerGas = maxFeePerGas;
-  }
+  // Calculate budget cap
+  const maxAllowedGasUsd = MAX_GAS_USD;
+  const maxAllowedGasEth = maxAllowedGasUsd / ETH_PRICE_USD;
+  const maxAllowedGasWei = ethers.parseEther(maxAllowedGasEth.toFixed(18));
+  const cappedMaxFeePerGas = maxAllowedGasWei / estimatedGasUnits;
   
   const gasWithinBudget = estimatedGasCostUsd <= MAX_GAS_USD;
   const finalMaxFeePerGas = gasWithinBudget ? maxFeePerGas : cappedMaxFeePerGas;
@@ -190,7 +181,7 @@ async function attemptFlush(epochInfo, balanceInfo) {
     
     console.log('📋 Step 1: Checking if queue is flushable...');
     try {
-      await flushContract.flushEntryQueue.staticCall();
+      await contract.flushEntryQueue.staticCall();
       console.log('   ✅ Queue has validators ready to flush!\n');
     } catch (error) {
       console.log('   ❌ Queue is empty or already flushed');
@@ -213,17 +204,17 @@ async function attemptFlush(epochInfo, balanceInfo) {
     console.log('📋 Step 3: Sending transaction...');
     const maxPriorityFeePerGas = balanceInfo.finalMaxFeePerGas * 115n / 100n;
     
-    console.log(`   Gas Limit: 500,000`);
+    console.log(`   Gas Limit: 350,000`);
     console.log(`   Max Fee: ${ethers.formatUnits(balanceInfo.finalMaxFeePerGas, 'gwei')} gwei`);
-    console.log(`   Priority Fee: +15% for competitive edge`);
+    console.log(`   Priority: +15% boost`);
     
-    const tx = await flushContract.flushEntryQueue({
-      gasLimit: 500000,
+    const tx = await contract.flushEntryQueue({
+      gasLimit: 350000,
       maxFeePerGas: balanceInfo.finalMaxFeePerGas,
       maxPriorityFeePerGas: maxPriorityFeePerGas
     });
     
-    console.log(`\n   📤 Transaction Hash: ${tx.hash}`);
+    console.log(`\n   📤 TX Hash: ${tx.hash}`);
     console.log('   ⏳ Waiting for confirmation...\n');
     
     const receipt = await tx.wait();
@@ -244,10 +235,10 @@ async function attemptFlush(epochInfo, balanceInfo) {
       console.log(`   Block: #${receipt.blockNumber}`);
       console.log(`   Gas Used: ${gasUsed.toString()}`);
       console.log(`   Gas Price: ${ethers.formatUnits(effectiveGasPrice, 'gwei')} gwei`);
-      console.log(`   Cost: ${actualCostEth.toFixed(6)} ETH ($${actualCostUsd.toFixed(2)})`);
+      console.log(`   Actual Cost: ${actualCostEth.toFixed(6)} ETH ($${actualCostUsd.toFixed(2)})`);
       console.log('─────────────────────────────────────────────────\n');
       
-      const myRewards = await flushContract.rewardsOf(wallet.address);
+      const myRewards = await contract.rewardsOf(wallet.address);
       const rewardsAztec = parseFloat(ethers.formatEther(myRewards));
       
       console.log('💎 REWARDS:');
@@ -263,12 +254,12 @@ async function attemptFlush(epochInfo, balanceInfo) {
     }
     
   } catch (error) {
-    console.log(`\n❌ Error: ${error.message}\n`);
+    console.log(`\n❌ Error: ${error.message.substring(0, 100)}\n`);
     
     if (error.message.includes('insufficient funds')) {
       console.log('⚠️  Not enough ETH for gas fees!\n');
     } else if (error.message.includes('nonce')) {
-      console.log('⚠️  Transaction nonce issue - might be pending\n');
+      console.log('⚠️  Nonce issue - transaction might be pending\n');
     }
     
     return false;
@@ -291,7 +282,6 @@ async function displayStatus() {
   console.log('─────────────────────────────────────────────────');
   console.log(`   ${epoch.currentTime} (PKT)`);
   console.log(`   Block: #${epoch.blockNumber}`);
-  console.log(`   Data Source: ${epoch.usingRollup ? '🔗 Rollup Contract' : '🧮 Calculation'}`);
   console.log('─────────────────────────────────────────────────');
   
   console.log('\n📊 EPOCH STATUS:');
@@ -312,6 +302,7 @@ async function displayStatus() {
     console.log('   Status: 🔴 CRITICAL - No ETH!');
   } else if (balance.isCritical) {
     console.log('   Status: 🟠 WARNING - Very Low ETH!');
+    console.log(`   ⚠️  Add more ETH soon! Current: ${balance.ethBalance.toFixed(6)} ETH`);
   } else if (balance.isLow) {
     console.log('   Status: 🟡 Low ETH');
   } else {
@@ -324,33 +315,34 @@ async function displayStatus() {
   console.log(`   Current Price: ${balance.gasPriceGwei.toFixed(2)} gwei`);
   console.log(`   Est. TX Cost: ${balance.estimatedCostEth.toFixed(6)} ETH ($${balance.estimatedCostUsd.toFixed(2)})`);
   console.log(`   Budget Limit: $${balance.maxBudgetUsd.toFixed(2)}`);
-  console.log(`   Within Budget: ${balance.gasWithinBudget ? '✅ Yes' : '❌ No (too expensive)'}`);
+  console.log(`   Within Budget: ${balance.gasWithinBudget ? '✅ Yes' : '❌ No'}`);
   console.log('─────────────────────────────────────────────────');
   
   try {
-    const poolRewards = await flushContract.rewardsAvailable();
+    const poolRewards = await contract.rewardsAvailable();
     const poolAztec = parseFloat(ethers.formatEther(poolRewards));
     console.log('\n🏆 REWARD POOL:');
     console.log('─────────────────────────────────────────────────');
     console.log(`   Available: ${poolAztec.toFixed(2)} AZTEC`);
     console.log('─────────────────────────────────────────────────');
   } catch (error) {
-    // Ignore
+    // Ignore pool fetch errors
   }
   
   console.log('\n🎯 DECISION:');
   console.log('─────────────────────────────────────────────────');
   
   if (balance.isEmpty) {
-    console.log('   ❌ Cannot flush - No ETH balance!');
-    console.log(`   💡 Add ETH to: ${wallet.address}`);
+    console.log('   ❌ Cannot flush - No ETH!');
+    console.log(`   💡 Send ETH to: ${wallet.address}`);
+  } else if (balance.isCritical) {
+    console.log('   ⚠️  ETH critically low - add more soon!');
   } else if (!balance.gasWithinBudget) {
-    console.log(`   ⏸️  Waiting - Gas too expensive ($${balance.estimatedCostUsd.toFixed(2)})`);
-    console.log('   💡 Will retry when gas drops');
+    console.log(`   ⏸️  Gas too expensive ($${balance.estimatedCostUsd.toFixed(2)})`);
   } else if (epoch.isEpochStart) {
-    console.log('   🚀 NEW EPOCH DETECTED - Attempting flush!');
+    console.log('   🚀 EPOCH START - Attempting flush!');
   } else {
-    console.log(`   ⏳ Waiting for next epoch (${formatDuration(epoch.secondsUntilNext)})`);
+    console.log(`   ⏳ Waiting ${formatDuration(epoch.secondsUntilNext)} for next epoch`);
   }
   console.log('─────────────────────────────────────────────────\n');
   
@@ -358,7 +350,7 @@ async function displayStatus() {
 }
 
 // ════════════════════════════════════════════════════════════
-// MAIN LOOP WITH SMART INTERVALS
+// MAIN LOOP
 // ════════════════════════════════════════════════════════════
 
 let lastFlushEpoch = -1;
@@ -366,14 +358,13 @@ let flushCount = 0;
 
 async function mainLoop() {
   console.log('\n═══════════════════════════════════════════════════════');
-  console.log('      🤖 AZTEC FLUSH BOT - SMART INTERVAL VERSION');
+  console.log('      🤖 AZTEC FLUSH BOT - SMART INTERVAL v2');
   console.log('═══════════════════════════════════════════════════════');
   console.log(`📍 Wallet: ${wallet.address}`);
-  console.log(`📍 Flush Contract: ${FLUSH_REWARDER_ADDRESS}`);
-  console.log(`📍 Rollup Contract: ${ROLLUP_ADDRESS}`);
+  console.log(`📍 Contract: ${FLUSH_REWARDER_ADDRESS}`);
   console.log(`⏰ Started: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`);
-  console.log(`🧠 Smart Intervals: 3s→5s→10s→30s (adaptive)`);
-  console.log(`💵 Max Gas Budget: $${MAX_GAS_USD} per transaction`);
+  console.log(`🧠 Intervals: 30s→10s→5s→3s (adaptive)`);
+  console.log(`💵 Max Gas: $${MAX_GAS_USD}/tx`);
   console.log('═══════════════════════════════════════════════════════\n');
   
   while (true) {
@@ -393,29 +384,27 @@ async function mainLoop() {
           
           console.log('📈 SESSION STATS:');
           console.log('─────────────────────────────────────────────────');
-          console.log(`   Total Successful Flushes: ${flushCount}`);
-          console.log(`   Total Rewards Earned: ${flushCount * 100} AZTEC`);
+          console.log(`   Successful Flushes: ${flushCount}`);
+          console.log(`   Total Rewards: ${flushCount * 100} AZTEC`);
           console.log('─────────────────────────────────────────────────\n');
         }
       }
       
-      // Calculate smart interval based on time until next epoch
-      const smartInterval = getSmartInterval(epoch.secondsUntilNext);
-      
-      console.log(`🧠 Next check in: ${smartInterval}s (${epoch.secondsUntilNext}s until epoch)\n`);
+      const interval = getSmartInterval(epoch.secondsUntilNext);
+      console.log(`🧠 Next check: ${interval}s\n`);
       console.log('═'.repeat(55) + '\n');
       
-      await new Promise(resolve => setTimeout(resolve, smartInterval * 1000));
+      await new Promise(resolve => setTimeout(resolve, interval * 1000));
       
     } catch (error) {
-      console.error('\n💥 Error in main loop:', error.message);
-      console.log('⏳ Retrying in 30 seconds...\n');
+      console.error('\n💥 Error:', error.message.substring(0, 100));
+      console.log('⏳ Retry in 30s...\n');
       await new Promise(resolve => setTimeout(resolve, 30000));
     }
   }
 }
 
 mainLoop().catch(error => {
-  console.error('💥 Fatal error:', error);
+  console.error('💥 Fatal:', error);
   process.exit(1);
 });

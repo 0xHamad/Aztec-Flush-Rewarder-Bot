@@ -463,12 +463,26 @@ class ProfessionalFlashbotsBot {
                     this.lastFlushEpoch !== nextEpoch.epoch;
                 
                 if (shouldSubmit) {
+                    // IMMEDIATELY set flags to prevent double-trigger
                     this.isProcessing = true;
                     this.bundleSubmitted = true;
                     
                     console.log(`\n\n🎯 TRIGGER: ${timeUntilNext}s until Epoch ${nextEpoch.epoch}`);
                     console.log(`   Next epoch starts: ${nextEpoch.startDate.toISOString()}`);
                     console.log(`   Blockchain time: ${new Date(currentTime * 1000).toISOString()}`);
+                    
+                    // Check ETH balance first
+                    const balance = await this.provider.getBalance(this.wallet.address);
+                    const minBalance = ethers.parseEther('0.0002'); // Minimum 0.0002 ETH
+                    
+                    if (balance < minBalance) {
+                        console.log(`   ❌ INSUFFICIENT ETH BALANCE!`);
+                        console.log(`   Current: ${ethers.formatEther(balance)} ETH`);
+                        console.log(`   Minimum needed: 0.0002 ETH`);
+                        console.log(`   Please add more ETH to wallet!\n`);
+                        this.isProcessing = false;
+                        continue;
+                    }
                     
                     // Predict target block
                     const blockPrediction = await this.predictBlockNumber(nextEpoch.startTimestamp);
@@ -482,7 +496,10 @@ class ProfessionalFlashbotsBot {
                     const flashbotsPromise = this.submitFlashbotsBundle(blockPrediction.predicted);
                     
                     // 2. Wait for target block to be close
-                    await this.sleep(Math.max(0, timeUntilNext - 5) * 1000); // Wait until 5s before
+                    const waitTime = Math.max(0, timeUntilNext - 5);
+                    if (waitTime > 0) {
+                        await this.sleep(waitTime * 1000);
+                    }
                     
                     // 3. Send direct transaction as backup
                     console.log(`\n💨 Sending direct transaction as backup...`);

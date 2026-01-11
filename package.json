@@ -1,7 +1,7 @@
 {
-  "name": "aztec-flush-rewarder-bot",
-  "version": "2.0.0",
-  "description": "Professional Aztec Flush Rewarder Bot with epoch monitoring and auto-claim",
+  "name": "aztec-flush-rewarder-bot-advanced",
+  "version": "3.0.0",
+  "description": "Advanced Aztec Flush Bot with Flashbots + Real-time Epoch Tracking",
   "main": "bot.js",
   "scripts": {
     "setup": "bash setup.sh",
@@ -14,9 +14,11 @@
     "validator",
     "flush",
     "rewarder",
-    "bot"
+    "bot",
+    "flashbots",
+    "mev"
   ],
-  "author": "0xHamad",
+  "author": "0xHamad (Modified by Advanced Team)",
   "license": "MIT",
   "dependencies": {
     "ethers": "^6.10.0",

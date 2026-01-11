@@ -8,7 +8,7 @@ clear
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                                                            ║"
 echo "║    🚀  ULTRA-AGGRESSIVE AZTEC FLUSH BOT SETUP  🚀         ║"
-echo "║                       BY HAMAD                             ║"
+echo "║                         BY HAMAD                           ║"
 echo "║                                                            ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
@@ -32,27 +32,35 @@ if [ -f .env ]; then
     echo ""
 fi
 
-# Get RPC URL
-echo "📡 Step 1/2: Ethereum RPC Configuration"
+# Get HTTP RPC URL
+echo "📡 Step 1/3: HTTP RPC Configuration"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "You need an Ethereum RPC endpoint from:"
-echo "  • Alchemy (Recommended): https://www.alchemy.com/"
-echo "  • Infura: https://www.infura.io/"
-echo "  • QuickNode: https://www.quicknode.com/"
+echo "Get FREE API key from Alchemy:"
+echo "  1. Visit: https://dashboard.alchemy.com/"
+echo "  2. Create account (free)"
+echo "  3. Create New App → Ethereum → Mainnet"
+echo "  4. Copy API Key"
 echo ""
 echo "Format: https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
 echo ""
 
 while true; do
-    read -p "Enter your RPC URL: " RPC_URL
+    read -p "Enter your HTTP RPC URL: " RPC_URL
     
-    # Validate RPC URL format
     if [[ $RPC_URL =~ ^https?:// ]]; then
-        echo "✅ RPC URL accepted"
+        echo "✅ HTTP RPC URL accepted"
+        
+        # Extract API key for auto-generating WebSocket URL
+        if [[ $RPC_URL =~ alchemy\.com/v2/([a-zA-Z0-9_-]+) ]]; then
+            ALCHEMY_KEY="${BASH_REMATCH[1]}"
+        elif [[ $RPC_URL =~ infura\.io.*v3/([a-zA-Z0-9]+) ]]; then
+            INFURA_KEY="${BASH_REMATCH[1]}"
+        fi
+        
         break
     else
-        echo "❌ Invalid format! URL must start with http:// or https://"
+        echo "❌ Invalid format! URL must start with https://"
         echo ""
     fi
 done
@@ -61,8 +69,77 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+# Get WebSocket RPC URL
+echo "🔌 Step 2/3: WebSocket RPC (ULTRA-FAST MODE)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "⚡ WebSocket enables REAL-TIME epoch detection!"
+echo "   Without it: 10-15 second delay"
+echo "   With it: 0.001 second response time"
+echo ""
+
+# Auto-suggest WebSocket URL if we detected the provider
+if [ ! -z "$ALCHEMY_KEY" ]; then
+    SUGGESTED_WS="wss://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY"
+    echo "📌 Detected Alchemy! Suggested WebSocket URL:"
+    echo "   $SUGGESTED_WS"
+    echo ""
+    read -p "Use this WebSocket URL? (Y/n): " use_suggested
+    
+    if [ "$use_suggested" == "n" ] || [ "$use_suggested" == "N" ]; then
+        read -p "Enter custom WebSocket URL (or press Enter to skip): " WS_RPC_URL
+    else
+        WS_RPC_URL=$SUGGESTED_WS
+        echo "✅ Using suggested WebSocket URL"
+    fi
+elif [ ! -z "$INFURA_KEY" ]; then
+    SUGGESTED_WS="wss://mainnet.infura.io/ws/v3/$INFURA_KEY"
+    echo "📌 Detected Infura! Suggested WebSocket URL:"
+    echo "   $SUGGESTED_WS"
+    echo ""
+    read -p "Use this WebSocket URL? (Y/n): " use_suggested
+    
+    if [ "$use_suggested" == "n" ] || [ "$use_suggested" == "N" ]; then
+        read -p "Enter custom WebSocket URL (or press Enter to skip): " WS_RPC_URL
+    else
+        WS_RPC_URL=$SUGGESTED_WS
+        echo "✅ Using suggested WebSocket URL"
+    fi
+else
+    echo "💡 Convert your HTTP URL to WebSocket:"
+    echo ""
+    echo "Alchemy format:"
+    echo "  https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
+    echo "  becomes:"
+    echo "  wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
+    echo ""
+    echo "Infura format:"
+    echo "  https://mainnet.infura.io/v3/YOUR_KEY"
+    echo "  becomes:"
+    echo "  wss://mainnet.infura.io/ws/v3/YOUR_KEY"
+    echo ""
+    read -p "Enter WebSocket URL (or press Enter to skip): " WS_RPC_URL
+fi
+
+# Validate WebSocket URL
+if [[ -z "$WS_RPC_URL" ]]; then
+    echo "⚠️  WebSocket skipped - bot will use HTTP polling"
+    echo "💡 Performance will be slower without WebSocket"
+    WS_RPC_URL=""
+elif [[ $WS_RPC_URL =~ ^wss?:// ]]; then
+    echo "✅ WebSocket URL accepted - ULTRA-FAST MODE ENABLED! 🚀"
+else
+    echo "⚠️  Invalid WebSocket format (must start with wss://)"
+    echo "⚠️  Skipping WebSocket, using HTTP only"
+    WS_RPC_URL=""
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 # Get Private Key
-echo "🔑 Step 2/2: Wallet Configuration"
+echo "🔑 Step 3/3: Wallet Configuration"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "⚠️  IMPORTANT SECURITY NOTES:"
@@ -96,11 +173,14 @@ echo ""
 
 # Create .env file
 cat > .env << EOF
-# Aztec Flush Rewarder Bot Configuration
+# Aztec Ultra-Aggressive Flush Bot Configuration
 # Auto-generated on $(date)
 
-# Ethereum RPC URL
+# Ethereum HTTP RPC URL
 RPC_URL=$RPC_URL
+
+# WebSocket RPC URL (for real-time monitoring)
+WS_RPC_URL=$WS_RPC_URL
 
 # Wallet Private Key
 PRIVATE_KEY=$PRIVATE_KEY
@@ -118,14 +198,29 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "✅ Setup Complete!"
 echo ""
+
+# Show configuration summary
+echo "📊 Your Configuration:"
+echo "   HTTP RPC: ✅ Configured"
+if [ -z "$WS_RPC_URL" ]; then
+    echo "   WebSocket: ⚠️  Not configured (slower performance)"
+else
+    echo "   WebSocket: ✅ Configured (ULTRA-FAST mode enabled!)"
+fi
+echo "   Wallet: ✅ Configured"
+echo ""
+
 echo "Next steps:"
 echo "  1. Test configuration:  npm test"
 echo "  2. Start the bot:       npm start"
 echo ""
 echo "💡 Tips:"
 echo "  • Monitor bot logs regularly"
-echo "  • Keep at least 0.001 ETH in wallet for gas"
+echo "  • Keep at least 0.01 ETH in wallet for gas"
 echo "  • Press Ctrl+C to stop the bot anytime"
+if [ -z "$WS_RPC_URL" ]; then
+    echo "  • Consider adding WebSocket URL for 100x faster performance!"
+fi
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

@@ -1,57 +1,55 @@
 #!/bin/bash
 
-# Aztec Flush Rewarder Bot - Interactive Setup Script
-# ====================================================
-
 clear
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                                                            ║"
-echo "║    🚀  ULTRA-AGGRESSIVE AZTEC FLUSH BOT SETUP  🚀         ║"
-echo "║                         BY HAMAD                           ║"
+echo "║  🚀  ADVANCED AZTEC FLUSH BOT SETUP - FLASHBOTS EDITION   ║"
+echo "║                    BY 0xHAMAD                             ║"
 echo "║                                                            ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Welcome! This script will help you configure the bot."
+echo "This bot uses:"
+echo "  ⚡ Real-time epoch tracking from Rollup contract"
+echo "  ⚡ Precise timing formula: genesis + (epoch × 2304)"
+echo "  ⚡ Flashbots for MEV protection"
+echo "  ⚡ WebSocket for 0.001s response time"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Check if .env already exists
+# Check if .env exists
 if [ -f .env ]; then
     echo "⚠️  .env file already exists!"
     echo ""
-    read -p "Do you want to reconfigure? (y/n): " reconfigure
+    read -p "Reconfigure? (y/n): " reconfigure
     if [ "$reconfigure" != "y" ] && [ "$reconfigure" != "Y" ]; then
         echo ""
         echo "✅ Keeping existing configuration."
-        echo ""
-        echo "Run 'npm start' to start the bot."
+        echo "▶️  Run 'npm start' to start the bot."
         exit 0
     fi
     echo ""
 fi
 
-# Get HTTP RPC URL
-echo "📡 Step 1/3: HTTP RPC Configuration"
+# Step 1: HTTP RPC
+echo "📡 Step 1/5: HTTP RPC Configuration"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Get FREE API key from Alchemy:"
-echo "  1. Visit: https://dashboard.alchemy.com/"
-echo "  2. Create account (free)"
-echo "  3. Create New App → Ethereum → Mainnet"
-echo "  4. Copy API Key"
+echo "Get FREE RPC from:"
+echo "  • Alchemy: https://dashboard.alchemy.com/"
+echo "  • Infura: https://infura.io/"
 echo ""
 echo "Format: https://eth-mainnet.g.alchemy.com/v2/YOUR_API_KEY"
 echo ""
 
 while true; do
-    read -p "Enter your HTTP RPC URL: " RPC_URL
+    read -p "Enter HTTP RPC URL: " RPC_URL
     
     if [[ $RPC_URL =~ ^https?:// ]]; then
-        echo "✅ HTTP RPC URL accepted"
+        echo "✅ HTTP RPC accepted"
         
-        # Extract API key for auto-generating WebSocket URL
+        # Extract key for WebSocket suggestion
         if [[ $RPC_URL =~ alchemy\.com/v2/([a-zA-Z0-9_-]+) ]]; then
             ALCHEMY_KEY="${BASH_REMATCH[1]}"
         elif [[ $RPC_URL =~ infura\.io.*v3/([a-zA-Z0-9]+) ]]; then
@@ -60,7 +58,7 @@ while true; do
         
         break
     else
-        echo "❌ Invalid format! URL must start with https://"
+        echo "❌ Invalid! Must start with https://"
         echo ""
     fi
 done
@@ -69,68 +67,55 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Get WebSocket RPC URL
-echo "🔌 Step 2/3: WebSocket RPC (ULTRA-FAST MODE)"
+# Step 2: WebSocket RPC
+echo "🔌 Step 2/5: WebSocket RPC (CRITICAL FOR SPEED!)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "⚡ WebSocket enables REAL-TIME epoch detection!"
-echo "   Without it: 10-15 second delay"
-echo "   With it: 0.001 second response time"
+echo "⚡ WebSocket enables 0.001s epoch detection!"
+echo "   Without it: 10-30 second delay ❌"
+echo "   With it: Instant response ✅"
 echo ""
 
-# Auto-suggest WebSocket URL if we detected the provider
 if [ ! -z "$ALCHEMY_KEY" ]; then
     SUGGESTED_WS="wss://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_KEY"
-    echo "📌 Detected Alchemy! Suggested WebSocket URL:"
+    echo "📌 Auto-detected Alchemy WebSocket:"
     echo "   $SUGGESTED_WS"
     echo ""
-    read -p "Use this WebSocket URL? (Y/n): " use_suggested
+    read -p "Use this? (Y/n): " use_suggested
     
     if [ "$use_suggested" == "n" ] || [ "$use_suggested" == "N" ]; then
-        read -p "Enter custom WebSocket URL (or press Enter to skip): " WS_RPC_URL
+        read -p "Enter custom WebSocket URL: " WS_RPC_URL
     else
         WS_RPC_URL=$SUGGESTED_WS
-        echo "✅ Using suggested WebSocket URL"
+        echo "✅ Using auto-detected WebSocket"
     fi
 elif [ ! -z "$INFURA_KEY" ]; then
     SUGGESTED_WS="wss://mainnet.infura.io/ws/v3/$INFURA_KEY"
-    echo "📌 Detected Infura! Suggested WebSocket URL:"
+    echo "📌 Auto-detected Infura WebSocket:"
     echo "   $SUGGESTED_WS"
     echo ""
-    read -p "Use this WebSocket URL? (Y/n): " use_suggested
+    read -p "Use this? (Y/n): " use_suggested
     
     if [ "$use_suggested" == "n" ] || [ "$use_suggested" == "N" ]; then
-        read -p "Enter custom WebSocket URL (or press Enter to skip): " WS_RPC_URL
+        read -p "Enter custom WebSocket URL: " WS_RPC_URL
     else
         WS_RPC_URL=$SUGGESTED_WS
-        echo "✅ Using suggested WebSocket URL"
+        echo "✅ Using auto-detected WebSocket"
     fi
 else
-    echo "💡 Convert your HTTP URL to WebSocket:"
+    echo "Convert your HTTP to WebSocket:"
+    echo "  https://... → wss://..."
     echo ""
-    echo "Alchemy format:"
-    echo "  https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-    echo "  becomes:"
-    echo "  wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-    echo ""
-    echo "Infura format:"
-    echo "  https://mainnet.infura.io/v3/YOUR_KEY"
-    echo "  becomes:"
-    echo "  wss://mainnet.infura.io/ws/v3/YOUR_KEY"
-    echo ""
-    read -p "Enter WebSocket URL (or press Enter to skip): " WS_RPC_URL
+    read -p "Enter WebSocket URL (or skip): " WS_RPC_URL
 fi
 
-# Validate WebSocket URL
 if [[ -z "$WS_RPC_URL" ]]; then
-    echo "⚠️  WebSocket skipped - bot will use HTTP polling"
-    echo "💡 Performance will be slower without WebSocket"
+    echo "⚠️  WebSocket skipped - slower performance!"
     WS_RPC_URL=""
 elif [[ $WS_RPC_URL =~ ^wss?:// ]]; then
-    echo "✅ WebSocket URL accepted - ULTRA-FAST MODE ENABLED! 🚀"
+    echo "✅ WebSocket enabled - ULTRA-FAST mode! 🚀"
 else
-    echo "⚠️  Invalid WebSocket format (must start with wss://)"
-    echo "⚠️  Skipping WebSocket, using HTTP only"
+    echo "⚠️  Invalid format, skipping WebSocket"
     WS_RPC_URL=""
 fi
 
@@ -138,31 +123,25 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Get Private Key
-echo "🔑 Step 3/3: Wallet Configuration"
+# Step 3: Private Key
+echo "🔑 Step 3/5: Wallet Private Key"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "⚠️  IMPORTANT SECURITY NOTES:"
-echo "  • Use a DEDICATED wallet for this bot"
-echo "  • Keep only 0.05-0.1 ETH in this wallet"
-echo "  • NEVER share your private key with anyone"
-echo "  • This key will be stored locally in .env file"
-echo ""
-echo "Your private key should:"
-echo "  • Start with 0x"
-echo "  • Be 66 characters long (including 0x)"
+echo "⚠️  SECURITY:"
+echo "  • Use DEDICATED wallet (not your main wallet!)"
+echo "  • Keep only 0.05-0.1 ETH"
+echo "  • Never share this key"
 echo ""
 
 while true; do
-    read -sp "Enter your wallet private key: " PRIVATE_KEY
+    read -sp "Enter private key (0x...): " PRIVATE_KEY
     echo ""
     
-    # Validate private key format
     if [[ $PRIVATE_KEY =~ ^0x[a-fA-F0-9]{64}$ ]]; then
-        echo "✅ Private key format valid"
+        echo "✅ Valid format"
         break
     else
-        echo "❌ Invalid format! Must be 66 characters starting with 0x"
+        echo "❌ Invalid! Must be 66 chars starting with 0x"
         echo ""
     fi
 done
@@ -171,66 +150,125 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Create .env file
+# Step 4: Flashbots
+echo "⚡ Step 4/5: Flashbots Configuration"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Flashbots benefits:"
+echo "  ✅ Precise block targeting"
+echo "  ✅ MEV protection"
+echo "  ✅ Higher success rate"
+echo ""
+read -p "Enable Flashbots? (Y/n): " enable_fb
+
+if [ "$enable_fb" == "n" ] || [ "$enable_fb" == "N" ]; then
+    ENABLE_FLASHBOTS="false"
+    echo "⚠️  Flashbots disabled (using direct transactions)"
+else
+    ENABLE_FLASHBOTS="true"
+    echo "✅ Flashbots enabled!"
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Step 5: Gas Budget
+echo "💰 Step 5/5: Gas Budget"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Maximum you're willing to pay per flush (in USD)"
+echo ""
+read -p "Max gas budget (default: 0.30): " MAX_GAS_USD
+
+if [ -z "$MAX_GAS_USD" ]; then
+    MAX_GAS_USD="0.30"
+fi
+
+echo "✅ Max gas: \$MAX_GAS_USD per transaction"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Create .env
 cat > .env << EOF
-# Aztec Ultra-Aggressive Flush Bot Configuration
-# Auto-generated on $(date)
+# ==========================================
+# AZTEC FLUSH BOT - ADVANCED CONFIGURATION
+# Auto-generated: $(date)
+# ==========================================
 
-# Ethereum HTTP RPC URL
+# RPC Configuration
 RPC_URL=$RPC_URL
-
-# WebSocket RPC URL (for real-time monitoring)
 WS_RPC_URL=$WS_RPC_URL
 
-# Wallet Private Key
+# Wallet
 PRIVATE_KEY=$PRIVATE_KEY
+
+# Flashbots
+ENABLE_FLASHBOTS=$ENABLE_FLASHBOTS
+FLASHBOTS_RELAY_URL=https://relay.flashbots.net
+
+# Gas Budget
+MAX_GAS_USD=$MAX_GAS_USD
+MIN_GAS_USD=0.05
+ETH_PRICE_USD=3300
+
+# Timing
+SEND_TX_BEFORE_EPOCH=25
+AGGRESSIVE_MODE=true
+
+# Contract Addresses
+FLUSH_REWARDER_ADDRESS=0x7C9a7130379F1B5dd6e7A53AF84fC0fE32267B65
+ROLLUP_ADDRESS=0x603bb2c05D474794ea97805e8De69bCcFb3bCA12
+
+# Network Constants
+GENESIS_TIMESTAMP=1704067200
+EPOCH_DURATION_SECONDS=2304
+SLOT_DURATION_SECONDS=72
 EOF
 
-echo "📝 Configuration saved to .env file"
-echo ""
-
-# Set proper permissions
 chmod 600 .env
-echo "🔒 File permissions set (only you can read)"
+echo "📝 Configuration saved to .env"
+echo "🔒 File permissions set (secure)"
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "✅ Setup Complete!"
+echo "✅ SETUP COMPLETE!"
 echo ""
-
-# Show configuration summary
 echo "📊 Your Configuration:"
-echo "   HTTP RPC: ✅ Configured"
+echo "   HTTP RPC: ✅"
 if [ -z "$WS_RPC_URL" ]; then
-    echo "   WebSocket: ⚠️  Not configured (slower performance)"
+    echo "   WebSocket: ❌ (slower)"
 else
-    echo "   WebSocket: ✅ Configured (ULTRA-FAST mode enabled!)"
+    echo "   WebSocket: ✅ (ULTRA-FAST!)"
 fi
-echo "   Wallet: ✅ Configured"
+echo "   Flashbots: ${ENABLE_FLASHBOTS}"
+echo "   Max Gas: \$MAX_GAS_USD"
 echo ""
-
 echo "Next steps:"
-echo "  1. Test configuration:  npm test"
-echo "  2. Start the bot:       npm start"
-echo ""
-echo "💡 Tips:"
-echo "  • Monitor bot logs regularly"
-echo "  • Keep at least 0.01 ETH in wallet for gas"
-echo "  • Press Ctrl+C to stop the bot anytime"
-if [ -z "$WS_RPC_URL" ]; then
-    echo "  • Consider adding WebSocket URL for 100x faster performance!"
-fi
+echo "  1. Install Flashbots: npm install @flashbots/ethers-provider-bundle"
+echo "  2. Test config: npm test"
+echo "  3. Start bot: npm start"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Ask if user wants to test now
-read -p "Would you like to test the configuration now? (y/n): " test_now
+read -p "Install Flashbots package now? (y/n): " install_now
+
+if [ "$install_now" == "y" ] || [ "$install_now" == "Y" ]; then
+    echo ""
+    echo "📦 Installing dependencies..."
+    npm install @flashbots/ethers-provider-bundle
+    echo ""
+fi
+
+read -p "Test configuration now? (y/n): " test_now
 
 if [ "$test_now" == "y" ] || [ "$test_now" == "Y" ]; then
     echo ""
-    echo "🔍 Running configuration test..."
+    echo "🔍 Running tests..."
     echo ""
     npm test
 fi
